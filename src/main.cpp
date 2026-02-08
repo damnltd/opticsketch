@@ -12,6 +12,7 @@
 #include "ui/library_panel.h"
 #include "ui/toolbox_panel.h"
 #include "ui/outliner_panel.h"
+#include "ui/properties_panel.h"
 #include "render/viewport.h"
 #include "render/raycast.h"
 #include "render/gizmo.h"
@@ -164,6 +165,7 @@ int main() {
     // Create toolbox panel
     opticsketch::ToolboxPanel toolboxPanel;
     opticsketch::OutlinerPanel outlinerPanel;
+    opticsketch::PropertiesPanel propertiesPanel;
     
     // Application state
     AppState app;
@@ -456,6 +458,9 @@ int main() {
                 if (ImGui::MenuItem("Library", nullptr, libraryPanel.isVisible())) {
                     libraryPanel.setVisible(!libraryPanel.isVisible());
                 }
+                if (ImGui::MenuItem("Properties", nullptr, propertiesPanel.isVisible())) {
+                    propertiesPanel.setVisible(!propertiesPanel.isVisible());
+                }
                 if (ImGui::MenuItem("Toolbox", nullptr, toolboxPanel.isVisible())) {
                     toolboxPanel.setVisible(!toolboxPanel.isVisible());
                 }
@@ -552,6 +557,9 @@ int main() {
         
         // Outliner (scene structure)
         outlinerPanel.render(&scene);
+        
+        // Properties (selected element)
+        propertiesPanel.render(&scene);
         
         // Viewport window
         if (ImGui::Begin("3D Viewport", &viewportWindowVisible)) {
