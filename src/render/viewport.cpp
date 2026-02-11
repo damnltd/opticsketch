@@ -1,5 +1,6 @@
 #include "render/viewport.h"
 #include "render/gizmo.h"
+#include "render/beam.h"
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "export/export_png.h"
@@ -794,6 +795,89 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
     glLineWidth(1.0f);
 }
 
+void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
+    if (!scene) return;
+
+    gridShader.use();
+    gridShader.setMat4("uView", camera.getViewMatrix());
+    gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+
+    for (const auto& beam : scene->getBeams()) {
+        if (!beam->visible) continue;
+
+        bool isSelected = (selectedBeam == beam.get());
+        glLineWidth(isSelected ? 4.0f : 2.0f);
+
+        // Create line vertices (position + normal)
+        std::vector<float> vertices = {
+            beam->start.x, beam->start.y, beam->start.z, 0.0f, 0.0f, 1.0f,
+            beam->end.x, beam->end.y, beam->end.z, 0.0f, 0.0f, 1.0f
+        };
+
+        glm::mat4 model = glm::mat4(1.0f);
+        gridShader.setMat4("uModel", model);
+        // Selected beam renders white, otherwise its own color
+        gridShader.setVec3("uColor", isSelected ? glm::vec3(1.0f, 1.0f, 1.0f) : beam->color);
+        gridShader.setFloat("uAlpha", 1.0f);
+
+        GLuint beamVAO, beamVBO;
+        glGenVertexArrays(1, &beamVAO);
+        glGenBuffers(1, &beamVBO);
+
+        glBindVertexArray(beamVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+
+        glDrawArrays(GL_LINES, 0, 2);
+
+        glDeleteVertexArrays(1, &beamVAO);
+        glDeleteBuffers(1, &beamVBO);
+    }
+
+    glLineWidth(1.0f);
+}
+
+void Viewport::renderBeam(const Beam& beam) {
+    gridShader.use();
+    gridShader.setMat4("uView", camera.getViewMatrix());
+    gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+    
+    std::vector<float> vertices = {
+        beam.start.x, beam.start.y, beam.start.z, 0.0f, 0.0f, 1.0f,
+        beam.end.x, beam.end.y, beam.end.z, 0.0f, 0.0f, 1.0f
+    };
+    
+    glm::mat4 model = glm::mat4(1.0f);
+    gridShader.setMat4("uModel", model);
+    gridShader.setVec3("uColor", beam.color);
+    gridShader.setFloat("uAlpha", 0.7f); // Semi-transparent for preview
+    
+    GLuint beamVAO, beamVBO;
+    glGenVertexArrays(1, &beamVAO);
+    glGenBuffers(1, &beamVBO);
+    
+    glBindVertexArray(beamVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    
+    glLineWidth(beam.width);
+    glDrawArrays(GL_LINES, 0, 2);
+    glLineWidth(1.0f);
+    
+    glDeleteVertexArrays(1, &beamVAO);
+    glDeleteBuffers(1, &beamVBO);
+}
+
 void Viewport::renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle) {
     if (!gizmo || !scene) return;
     
@@ -813,6 +897,7 @@ bool Viewport::exportToPng(const std::string& path, Scene* scene) {
     if (framebufferId == 0 || !scene) return false;
     beginFrame();
     renderScene(scene, true);
+    renderBeams(scene);
     std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 3);
     // Row alignment 1 so glReadPixels writes exactly width*3 bytes per row (no padding)
     glPixelStorei(GL_PACK_ALIGNMENT, 1);

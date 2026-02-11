@@ -1,4 +1,5 @@
 #include "scene/scene.h"
+#include "render/beam.h"
 #include <algorithm>
 #include <string>
 
@@ -64,21 +65,61 @@ Element* Scene::getElement(const std::string& id) {
     return (it != elements.end()) ? it->get() : nullptr;
 }
 
+void Scene::addBeam(std::unique_ptr<Beam> beam) {
+    if (!beam) return;
+    beams.push_back(std::move(beam));
+}
+
+bool Scene::removeBeam(const std::string& id) {
+    auto it = std::find_if(beams.begin(), beams.end(),
+        [&id](const std::unique_ptr<Beam>& beam) {
+            return beam->id == id;
+        });
+
+    if (it != beams.end()) {
+        if (selectedBeam == it->get()) {
+            selectedBeam = nullptr;
+        }
+        beams.erase(it);
+        return true;
+    }
+    return false;
+}
+
+Beam* Scene::getBeam(const std::string& id) {
+    auto it = std::find_if(beams.begin(), beams.end(),
+        [&id](const std::unique_ptr<Beam>& beam) {
+            return beam->id == id;
+        });
+    
+    return (it != beams.end()) ? it->get() : nullptr;
+}
+
 void Scene::clear() {
     elements.clear();
+    beams.clear();
     selectedElement = nullptr;
+    selectedBeam = nullptr;
 }
 
 void Scene::selectElement(const std::string& id) {
     selectedElement = getElement(id);
+    selectedBeam = nullptr;  // mutual exclusion
+}
+
+void Scene::selectBeam(const std::string& id) {
+    selectedBeam = getBeam(id);
+    selectedElement = nullptr;  // mutual exclusion
 }
 
 void Scene::deselectAll() {
     selectedElement = nullptr;
+    selectedBeam = nullptr;
 }
 
 bool Scene::isSelected(const std::string& id) const {
-    return selectedElement && selectedElement->id == id;
+    return (selectedElement && selectedElement->id == id) ||
+           (selectedBeam && selectedBeam->id == id);
 }
 
 } // namespace opticsketch

@@ -1,5 +1,7 @@
 #include "ui/toolbox_panel.h"
 #include <cmath>
+#include <algorithm>
+#include <glm/glm.hpp>
 
 namespace opticsketch {
 
@@ -71,6 +73,29 @@ static void drawScaleIcon(ImDrawList* drawList, ImVec2 min, ImVec2 max) {
     drawList->AddLine(ImVec2(c.x + s, c.y + s), ImVec2(c.x + s, c.y + s + 4), col, th);
 }
 
+static void drawBeamIcon(ImDrawList* drawList, ImVec2 min, ImVec2 max) {
+    ImVec2 c = ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+    float s = (std::min(max.x - min.x, max.y - min.y) - ICON_PAD) * 0.35f;
+    ImU32 col = IM_COL32(255, 100, 100, 255); // Red color for beam
+    float th = 2.0f;
+    // Diagonal line (beam) with arrowhead
+    ImVec2 start(c.x - s * 0.7f, c.y + s * 0.7f);
+    ImVec2 end(c.x + s * 0.7f, c.y - s * 0.7f);
+    drawList->AddLine(start, end, col, th);
+    // Arrowhead
+    glm::vec2 dir(end.x - start.x, end.y - start.y);
+    float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+    if (len > 1e-5f) {
+        dir.x /= len;
+        dir.y /= len;
+        ImVec2 perp(-dir.y, dir.x);
+        ImVec2 tip = end;
+        ImVec2 base1(end.x - dir.x * 6 - perp.x * 4, end.y - dir.y * 6 - perp.y * 4);
+        ImVec2 base2(end.x - dir.x * 6 + perp.x * 4, end.y - dir.y * 6 + perp.y * 4);
+        drawList->AddTriangleFilled(tip, base1, base2, col);
+    }
+}
+
 ToolboxPanel::ToolboxPanel() {
 }
 
@@ -96,6 +121,7 @@ void ToolboxPanel::render() {
         case ToolMode::Move:   toolName = "Move";   toolDesc = "Click and drag to move (W)"; break;
         case ToolMode::Rotate: toolName = "Rotate"; toolDesc = "Click and drag to rotate (E)"; break;
         case ToolMode::Scale: toolName = "Scale";  toolDesc = "Click and drag to scale (R)"; break;
+        case ToolMode::DrawBeam: toolName = "Draw Beam"; toolDesc = "Click to place beam points (B)"; break;
     }
     ImGui::Text("%s", toolName);
     ImGui::TextDisabled("%s", toolDesc);
@@ -131,6 +157,8 @@ void ToolboxPanel::renderToolButtons() {
     drawToolButton("##ToolRotate", ToolMode::Rotate, drawRotateIcon);
     ImGui::SameLine();
     drawToolButton("##ToolScale", ToolMode::Scale, drawScaleIcon);
+    ImGui::SameLine();
+    drawToolButton("##ToolDrawBeam", ToolMode::DrawBeam, drawBeamIcon);
     
     ImGui::PopStyleVar(2);
 }

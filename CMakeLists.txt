@@ -11,12 +11,34 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 # Find packages
 find_package(OpenGL REQUIRED)
 if(NOT OpenGL_FOUND)
-    message(FATAL_ERROR "OpenGL not found. Please install libgl1-mesa-dev:\n  sudo apt-get install libgl1-mesa-dev")
+    if(WIN32)
+        message(FATAL_ERROR "OpenGL not found. OpenGL should be available through your graphics drivers on Windows.")
+    else()
+        message(FATAL_ERROR "OpenGL not found. Please install libgl1-mesa-dev:\n  sudo apt-get install libgl1-mesa-dev")
+    endif()
 endif()
 
-find_package(glfw3 REQUIRED)
+find_package(glfw3 QUIET)
+
+# If GLFW3 is not found via find_package, use FetchContent
 if(NOT glfw3_FOUND)
-    message(FATAL_ERROR "GLFW3 not found. Please install libglfw3-dev:\n  sudo apt-get install libglfw3-dev")
+    message(STATUS "GLFW3 not found via find_package, using FetchContent...")
+    include(FetchContent)
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG 3.3.8
+    )
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(glfw)
+    # Create alias for consistency
+    if(NOT TARGET glfw3)
+        add_library(glfw3 ALIAS glfw)
+    endif()
+else()
+    message(STATUS "GLFW3 found via find_package")
 endif()
 
 find_package(glm QUIET)
@@ -29,19 +51,23 @@ if(NOT glm_FOUND)
         GIT_REPOSITORY https://github.com/g-truc/glm.git
         GIT_TAG 0.9.9.8
     )
+    # GLM 0.9.9.8 uses old cmake_minimum_required; CMake 4+ requires policy >= 3.5
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version for subprojects (GLM compatibility)")
     FetchContent_MakeAvailable(glm)
 endif()
 
 # GLAD - OpenGL loader
+# GLAD - OpenGL loader
+# We generate the loader via Python (pip package), no need to add glad as a CMake subproject
 # GLAD requires Python to generate loader files
 # We'll use FetchContent to get GLAD and generate the loader
-include(FetchContent)
-FetchContent_Declare(
-    glad
-    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-    GIT_TAG v0.1.36
-)
-FetchContent_MakeAvailable(glad)
+#include(FetchContent)
+#FetchContent_Declare(
+#    glad
+#    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
+#    GIT_TAG v0.1.36
+#)
+#FetchContent_MakeAvailable(glad)
 
 # Generate GLAD loader for OpenGL 3.3 core profile
 # Requires: pip install glad
@@ -144,11 +170,13 @@ add_executable(${PROJECT_NAME}
     src/ui/library_panel.cpp
     src/ui/toolbox_panel.cpp
     src/ui/outliner_panel.cpp
+    src/ui/properties_panel.cpp
     src/camera/camera.cpp
     src/render/raycast.cpp
     src/render/gizmo.cpp
     src/render/shader.cpp
     src/render/viewport.cpp
+    src/render/beam.cpp
     src/export/export_png.cpp
     src/elements/element.cpp
     src/elements/basic_elements.cpp

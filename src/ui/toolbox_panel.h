@@ -8,7 +8,8 @@ enum class ToolMode {
     Select,
     Move,
     Rotate,
-    Scale
+    Scale,
+    DrawBeam
 };
 
 class ToolboxPanel {
