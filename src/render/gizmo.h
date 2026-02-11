@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <vector>
 #include "camera/camera.h"
@@ -22,6 +23,9 @@ public:
     
     // Initialize gizmo (load shader)
     void init(Shader* shader);
+
+    // Cleanup GPU resources
+    void cleanup();
     
     // Render gizmo for selected element; hoveredHandle: 0=X, 1=Y, 2=Z, -1=none (that axis highlighted).
     // exclusiveHandle: when >= 0 (e.g. while dragging), only that axis is drawn (and highlighted).
@@ -38,6 +42,7 @@ public:
     
 private:
     Shader* gizmoShader = nullptr;
+    GLuint solidVAO = 0, solidVBO = 0;
     
     // Gizmo rendering helpers. When exclusiveHandle >= 0, only that axis is drawn (and highlighted).
     void renderMoveGizmo(const Camera& camera, const glm::vec3& position, const glm::mat4& view, const glm::mat4& proj, int viewportWidth, int viewportHeight, int hoveredHandle, int exclusiveHandle = -1);

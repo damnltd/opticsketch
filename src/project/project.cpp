@@ -38,6 +38,7 @@ static const char* typeToString(ElementType t) {
         case ElementType::Lens:         return "Lens";
         case ElementType::BeamSplitter:  return "BeamSplitter";
         case ElementType::Detector:     return "Detector";
+        case ElementType::ImportedMesh: return "ImportedMesh";
         default:                         return "Laser";
     }
 }
@@ -47,6 +48,7 @@ static ElementType stringToType(const std::string& s) {
     if (s == "Lens") return ElementType::Lens;
     if (s == "BeamSplitter") return ElementType::BeamSplitter;
     if (s == "Detector") return ElementType::Detector;
+    if (s == "ImportedMesh") return ElementType::ImportedMesh;
     return ElementType::Laser;
 }
 
@@ -69,6 +71,9 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "visible " << (e.visible ? 1 : 0) << "\n";
         f << "locked " << (e.locked ? 1 : 0) << "\n";
         f << "layer " << e.layer << "\n";
+        if (e.type == ElementType::ImportedMesh && !e.meshSourcePath.empty()) {
+            f << "meshpath " << e.meshSourcePath << "\n";
+        }
         f << "end\n";
     }
     // Save beams
@@ -91,7 +96,7 @@ bool saveProject(const std::string& path, Scene* scene) {
 }
 
 static bool parseElementBlock(std::istream& in, Scene* scene) {
-    std::string typeStr = "Laser", id, label;
+    std::string typeStr = "Laser", id, label, meshpath;
     float px = 0, py = 0, pz = 0;
     float qx = 0, qy = 0, qz = 0, qw = 1;
     float sx = 1, sy = 1, sz = 1;
@@ -127,11 +132,19 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
             locked = std::stoi(line.substr(7));
         } else if (line.compare(0, 6, "layer ") == 0) {
             layer = std::stoi(line.substr(6));
+        } else if (line.compare(0, 9, "meshpath ") == 0) {
+            meshpath = line.substr(9);
+            trim(meshpath);
         }
     }
 
     ElementType type = stringToType(typeStr);
-    std::unique_ptr<Element> elem = createElement(type, id);
+    std::unique_ptr<Element> elem;
+    if (type == ElementType::ImportedMesh && !meshpath.empty()) {
+        elem = createMeshElement(meshpath, id);
+    } else {
+        elem = createElement(type, id);
+    }
     if (!elem) return false;
 
     elem->label = label;

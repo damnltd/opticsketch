@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,9 @@ public:
     // Get beam length
     float getLength() const;
     
+    // Deep-copy into a new Beam with a new ID
+    std::unique_ptr<Beam> clone() const;
+
     // Generate unique ID
     static std::string generateId();
 };

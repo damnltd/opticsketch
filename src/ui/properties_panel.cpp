@@ -14,6 +14,7 @@ static const char* elementTypeLabel(ElementType type) {
         case ElementType::Lens:          return "Lens";
         case ElementType::BeamSplitter:  return "Beam Splitter";
         case ElementType::Detector:      return "Detector";
+        case ElementType::ImportedMesh:  return "Mesh";
         default:                         return "?";
     }
 }

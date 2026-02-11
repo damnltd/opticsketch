@@ -12,6 +12,9 @@ std::unique_ptr<Element> createLens(const std::string& id = "");
 std::unique_ptr<Element> createBeamSplitter(const std::string& id = "");
 std::unique_ptr<Element> createDetector(const std::string& id = "");
 
+// Create mesh element from OBJ file path
+std::unique_ptr<Element> createMeshElement(const std::string& objPath, const std::string& id = "");
+
 // Helper to create element from type
 std::unique_ptr<Element> createElement(ElementType type, const std::string& id = "");
 

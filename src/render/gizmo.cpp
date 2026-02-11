@@ -160,21 +160,36 @@ void Gizmo::renderScaleGizmo(const Camera& camera, const glm::vec3& position,
     }
 }
 
+void Gizmo::cleanup() {
+    if (solidVAO != 0) {
+        glDeleteVertexArrays(1, &solidVAO);
+        glDeleteBuffers(1, &solidVBO);
+        solidVAO = 0;
+        solidVBO = 0;
+    }
+}
+
 void Gizmo::renderSolid(const std::vector<float>& vertices) {
     if (vertices.size() < 18) return;
-    GLuint vao, vbo;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
+
+    // Lazy-init reusable VAO/VBO
+    if (solidVAO == 0) {
+        glGenVertexArrays(1, &solidVAO);
+        glGenBuffers(1, &solidVBO);
+        glBindVertexArray(solidVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, solidVBO);
+        glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    glBindVertexArray(solidVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, solidVBO);
+    // Buffer orphaning: upload new data each call
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_DYNAMIC_DRAW);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size() / 6));
-    glDeleteVertexArrays(1, &vao);
-    glDeleteBuffers(1, &vbo);
 }
 
 void Gizmo::makeThickLineQuad(const glm::vec3& camPos, const glm::vec3& a, const glm::vec3& b, float halfWidth, std::vector<float>& outVertices) {

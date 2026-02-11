@@ -29,11 +29,12 @@ void LibraryPanel::render() {
     }
     
     // Category tabs - Unity/Unreal style horizontal buttons
-    const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Detectors"};
+    const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Detectors", "Imported"};
+    const int numCategories = 7;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 6));
-    
-    for (int i = 0; i < 6; i++) {
+
+    for (int i = 0; i < numCategories; i++) {
         if (i > 0) ImGui::SameLine();
         bool selected = (selectedCategory == categories[i]);
         
@@ -142,6 +143,11 @@ void LibraryPanel::renderElementItem(const LibraryItem& item) {
             borderColor = ImVec4(0.3f, 1.0f, 0.3f, 0.8f);
             icon = "◉";
             break;
+        case ElementType::ImportedMesh:
+            bgColor = ImVec4(0.15f, 0.15f, 0.15f, 0.6f);
+            borderColor = ImVec4(0.7f, 0.7f, 0.7f, 0.8f);
+            icon = "▣";
+            break;
     }
     
     // Grid view - Unity/Unreal style card
@@ -175,7 +181,12 @@ void LibraryPanel::renderElementItem(const LibraryItem& item) {
     bool isDragging = false;
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
         isDragging = true;
-        ImGui::SetDragDropPayload("ELEMENT_TYPE", &item.type, sizeof(ElementType));
+        // Find index of this item
+        int itemIndex = -1;
+        for (int idx = 0; idx < static_cast<int>(items.size()); idx++) {
+            if (items[idx].id == item.id) { itemIndex = idx; break; }
+        }
+        ImGui::SetDragDropPayload("LIBRARY_ITEM", &itemIndex, sizeof(int));
         ImGui::Text("%s %s", icon, item.name.c_str());
         ImGui::EndDragDropSource();
     }
@@ -244,6 +255,21 @@ std::vector<LibraryItem> LibraryPanel::getFilteredItems() const {
     }
     
     return result;
+}
+
+void LibraryPanel::addImportedItem(const std::string& name, const std::string& objPath) {
+    // Generate unique id
+    static int importCounter = 0;
+    std::string id = "imported_" + std::to_string(++importCounter);
+
+    LibraryItem item;
+    item.id = id;
+    item.name = name;
+    item.category = "Imported";
+    item.type = ElementType::ImportedMesh;
+    item.icon = "";
+    item.meshPath = objPath;
+    items.push_back(std::move(item));
 }
 
 } // namespace opticsketch

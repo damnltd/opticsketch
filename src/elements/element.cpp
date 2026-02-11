@@ -47,4 +47,18 @@ glm::vec3 Element::getWorldBoundsCenter() const {
     return (outMin + outMax) * 0.5f;
 }
 
+std::unique_ptr<Element> Element::clone() const {
+    auto e = std::make_unique<Element>(type, ""); // empty ID — Scene::addElement will ensure uniqueness
+    e->label = label;
+    e->transform = transform;
+    e->locked = locked;
+    e->visible = visible;
+    e->layer = layer;
+    e->boundsMin = boundsMin;
+    e->boundsMax = boundsMax;
+    e->meshVertices = meshVertices;
+    e->meshSourcePath = meshSourcePath;
+    return e;
+}
+
 } // namespace opticsketch

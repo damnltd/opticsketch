@@ -2,7 +2,9 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace opticsketch {
 
@@ -11,7 +13,8 @@ enum class ElementType {
     Mirror,
     Lens,
     BeamSplitter,
-    Detector
+    Detector,
+    ImportedMesh
 };
 
 struct Transform {
@@ -48,6 +51,10 @@ public:
     // Bounds (for selection and rendering)
     glm::vec3 boundsMin{-1.0f};
     glm::vec3 boundsMax{1.0f};
+
+    // Mesh data (for ImportedMesh type only)
+    std::vector<float> meshVertices;    // 6 floats per vertex (pos + normal)
+    std::string meshSourcePath;         // original OBJ path for re-import
     
     // Get world-space bounds (transform.getMatrix() * local bounds corners)
     void getWorldBounds(glm::vec3& outMin, glm::vec3& outMax) const;
@@ -55,6 +62,9 @@ public:
     // Transform pivot in world space = bbox center. Gizmo is drawn here; manipulator edits only transform, this is derived.
     glm::vec3 getWorldBoundsCenter() const;
     
+    // Deep-copy all fields into a new Element (new auto-generated ID, same label)
+    std::unique_ptr<Element> clone() const;
+
     // Local-space center of bounds (for deriving position from desired world pivot)
     glm::vec3 getLocalBoundsCenter() const {
         return (boundsMin + boundsMax) * 0.5f;

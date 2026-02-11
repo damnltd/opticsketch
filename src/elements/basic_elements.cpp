@@ -1,4 +1,5 @@
 #include "elements/basic_elements.h"
+#include "render/mesh_loader.h"
 #include <sstream>
 #include <random>
 
@@ -14,6 +15,7 @@ static std::string generateId(ElementType type) {
         case ElementType::Lens: prefix = "lens"; break;
         case ElementType::BeamSplitter: prefix = "bs"; break;
         case ElementType::Detector: prefix = "detector"; break;
+        case ElementType::ImportedMesh: prefix = "mesh"; break;
     }
     std::ostringstream oss;
     oss << prefix << "_" << (++counter);
@@ -52,6 +54,28 @@ std::unique_ptr<Element> createDetector(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Detector, id.empty() ? generateId(ElementType::Detector) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.1f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.1f);
+    return elem;
+}
+
+std::unique_ptr<Element> createMeshElement(const std::string& objPath, const std::string& id) {
+    MeshData data;
+    if (!loadObjFile(objPath, data)) return nullptr;
+
+    auto elem = std::make_unique<Element>(ElementType::ImportedMesh,
+                                          id.empty() ? generateId(ElementType::ImportedMesh) : id);
+    elem->meshVertices = std::move(data.vertices);
+    elem->meshSourcePath = objPath;
+    elem->boundsMin = data.boundsMin;
+    elem->boundsMax = data.boundsMax;
+
+    // Derive label from filename
+    std::string name = objPath;
+    auto pos = name.find_last_of("/\\");
+    if (pos != std::string::npos) name = name.substr(pos + 1);
+    auto dot = name.rfind('.');
+    if (dot != std::string::npos) name = name.substr(0, dot);
+    elem->label = name;
+
     return elem;
 }
 

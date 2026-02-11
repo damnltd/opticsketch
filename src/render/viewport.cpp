@@ -14,6 +14,10 @@
 
 namespace opticsketch {
 
+// Forward declarations for helper functions defined later in this file
+static CachedMesh createCachedMesh(const std::vector<float>& vertices, int floatsPerVertex = 6);
+static void deleteCachedMesh(CachedMesh& mesh);
+
 Viewport::Viewport() {
     camera.setAspectRatio(static_cast<float>(width) / height);
 }
@@ -33,7 +37,21 @@ void Viewport::cleanup() {
         gridVAO = 0;
         gridVBO = 0;
     }
+    // Delete prototype geometry caches
+    for (int i = 0; i < 6; i++) {
+        deleteCachedMesh(prototypeGeometry[i]);
+        deleteCachedMesh(prototypeWireframe[i]);
+    }
+    prototypesInitialized = false;
+    // Delete per-instance mesh caches
+    for (auto& [id, mesh] : meshCache) {
+        deleteCachedMesh(mesh);
+    }
+    meshCache.clear();
+    // Delete beam buffer
+    deleteCachedMesh(beamBuffer);
     if (gizmo) {
+        gizmo->cleanup();
         delete gizmo;
         gizmo = nullptr;
     }
@@ -129,6 +147,7 @@ void main() {
     }
     
     initGrid();
+    initPrototypeGeometry();
 }
 
 void Viewport::resize(int w, int h) {
@@ -226,6 +245,36 @@ void Viewport::initGrid() {
     
     glBindVertexArray(0);
     gridInitialized = true;
+}
+
+static CachedMesh createCachedMesh(const std::vector<float>& vertices, int floatsPerVertex) {
+    CachedMesh mesh;
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size() / floatsPerVertex);
+    if (mesh.vertexCount == 0) return mesh;
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    // Position attribute (location 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, floatsPerVertex * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Normal attribute (location 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, floatsPerVertex * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+    return mesh;
+}
+
+static void deleteCachedMesh(CachedMesh& mesh) {
+    if (mesh.vao != 0) {
+        glDeleteVertexArrays(1, &mesh.vao);
+        glDeleteBuffers(1, &mesh.vbo);
+        mesh.vao = 0;
+        mesh.vbo = 0;
+        mesh.vertexCount = 0;
+    }
 }
 
 void Viewport::renderGrid(float spacing, int gridSize) {
@@ -680,118 +729,116 @@ static std::vector<float> generatePlaneWireframeQuads(float size) {
     };
 }
 
+void Viewport::initPrototypeGeometry() {
+    if (prototypesInitialized) return;
+
+    // Solid geometry for each built-in ElementType
+    prototypeGeometry[(int)ElementType::Laser]        = createCachedMesh(generateCubeSolid(1.0f));
+    prototypeGeometry[(int)ElementType::Mirror]       = createCachedMesh(generateSphereSolid(0.5f, 16));
+    prototypeGeometry[(int)ElementType::Lens]         = createCachedMesh(generateTorusSolid(0.4f, 0.15f, 16, 8));
+    prototypeGeometry[(int)ElementType::BeamSplitter] = createCachedMesh(generateCylinderSolid(0.4f, 0.8f, 16));
+    prototypeGeometry[(int)ElementType::Detector]     = createCachedMesh(generatePlaneSolid(1.0f));
+
+    // Wireframe geometry (needs pos+normal format for the shader)
+    prototypeWireframe[(int)ElementType::Laser]        = createCachedMesh(wireframeLinesToVertices(generateCubeWireframe(1.0f)));
+    prototypeWireframe[(int)ElementType::Mirror]       = createCachedMesh(wireframeLinesToVertices(generateSphereWireframe(0.5f, 16)));
+    prototypeWireframe[(int)ElementType::Lens]         = createCachedMesh(wireframeLinesToVertices(generateTorusWireframe(0.4f, 0.15f, 16, 8)));
+    prototypeWireframe[(int)ElementType::BeamSplitter] = createCachedMesh(wireframeLinesToVertices(generateCylinderWireframe(0.4f, 0.8f, 16)));
+    prototypeWireframe[(int)ElementType::Detector]     = createCachedMesh(wireframeLinesToVertices(generatePlaneWireframeQuads(1.0f)));
+
+    prototypesInitialized = true;
+}
+
 void Viewport::renderScene(Scene* scene, bool forExport) {
     if (!scene) return;
-    
+
+    if (!prototypesInitialized) initPrototypeGeometry();
+
+    // Clean up stale mesh cache entries (for deleted ImportedMesh elements)
+    if (!meshCache.empty()) {
+        const auto& elements = scene->getElements();
+        auto it = meshCache.begin();
+        while (it != meshCache.end()) {
+            bool found = false;
+            for (const auto& elem : elements) {
+                if (elem->id == it->first) { found = true; break; }
+            }
+            if (!found) {
+                deleteCachedMesh(it->second);
+                it = meshCache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
-    
+
     for (const auto& elem : scene->getElements()) {
         if (!elem->visible) continue;
-        
+
         glm::mat4 model = elem->transform.getMatrix();
         gridShader.setMat4("uModel", model);
-        
-        // Set color based on element type
+
+        // Determine color and which cached mesh to use
         glm::vec3 color;
-        std::vector<float> vertices;
-        
+        CachedMesh* solidMesh = nullptr;
+
+        int typeIdx = static_cast<int>(elem->type);
         switch (elem->type) {
-            case ElementType::Laser:
-                color = glm::vec3(1.0f, 0.2f, 0.2f); // Red
-                vertices = generateCubeSolid(1.0f);
-                break;
-            case ElementType::Mirror:
-                color = glm::vec3(0.8f, 0.8f, 0.9f); // Silver
-                vertices = generateSphereSolid(0.5f, 16);
-                break;
-            case ElementType::Lens:
-                color = glm::vec3(0.7f, 0.9f, 1.0f); // Light blue
-                vertices = generateTorusSolid(0.4f, 0.15f, 16, 8);
-                break;
-            case ElementType::BeamSplitter:
-                color = glm::vec3(0.9f, 0.9f, 0.7f); // Yellow
-                vertices = generateCylinderSolid(0.4f, 0.8f, 16);
-                break;
-            case ElementType::Detector:
-                color = glm::vec3(0.2f, 1.0f, 0.2f); // Green
-                vertices = generatePlaneSolid(1.0f);
-                break;
+            case ElementType::Laser:        color = glm::vec3(1.0f, 0.2f, 0.2f); break;
+            case ElementType::Mirror:       color = glm::vec3(0.8f, 0.8f, 0.9f); break;
+            case ElementType::Lens:         color = glm::vec3(0.7f, 0.9f, 1.0f); break;
+            case ElementType::BeamSplitter: color = glm::vec3(0.9f, 0.9f, 0.7f); break;
+            case ElementType::Detector:     color = glm::vec3(0.2f, 1.0f, 0.2f); break;
+            case ElementType::ImportedMesh: color = glm::vec3(0.7f, 0.7f, 0.7f); break;
         }
-        
-        // Highlight selected elements (skip for export: no highlight, no wireframe)
+
+        if (elem->type == ElementType::ImportedMesh) {
+            // Per-instance cache for imported meshes
+            auto it = meshCache.find(elem->id);
+            if (it == meshCache.end()) {
+                auto inserted = meshCache.emplace(elem->id, createCachedMesh(elem->meshVertices));
+                solidMesh = &inserted.first->second;
+            } else {
+                solidMesh = &it->second;
+            }
+        } else {
+            solidMesh = &prototypeGeometry[typeIdx];
+        }
+
         bool isSelected = !forExport && (scene->getSelectedElement() == elem.get());
-        if (isSelected) {
-            // Make selected elements brighter
-            color = color * 1.3f; // Brighten
-        }
-        
-        // Calculate normal matrix for lighting
+        if (isSelected) color = color * 1.3f;
+
         glm::mat3 normalMatrix = glm::mat3(glm::transpose(glm::inverse(model)));
-        
         gridShader.setVec3("uColor", color);
         gridShader.setFloat("uAlpha", isSelected ? 1.0f : 0.9f);
         gridShader.setMat3("uNormalMatrix", normalMatrix);
-        
-        // Set light position (camera position for now)
-        glm::vec3 lightPos = camera.position;
-        gridShader.setVec3("uLightPos", lightPos);
+        gridShader.setVec3("uLightPos", camera.position);
         gridShader.setVec3("uViewPos", camera.position);
-        
-        GLuint shapeVAO, shapeVBO;
-        glGenVertexArrays(1, &shapeVAO);
-        glGenBuffers(1, &shapeVBO);
-        
-        glBindVertexArray(shapeVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, shapeVBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-        
-        // Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        // Normal attribute (location 1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size() / 6));
-        
-        // Selected: quad-style wireframe overlay (GL_LINES, no triangle diagonals). Skip when forExport.
-        if (isSelected && !forExport) {
-            std::vector<float> wfLines;
-            switch (elem->type) {
-                case ElementType::Laser:    wfLines = generateCubeWireframe(1.0f); break;
-                case ElementType::Mirror:   wfLines = generateSphereWireframe(0.5f, 16); break;
-                case ElementType::Lens:     wfLines = generateTorusWireframe(0.4f, 0.15f, 16, 8); break;
-                case ElementType::BeamSplitter: wfLines = generateCylinderWireframe(0.4f, 0.8f, 16); break;
-                case ElementType::Detector: wfLines = generatePlaneWireframeQuads(1.0f); break;
-            }
-            if (!wfLines.empty()) {
-                std::vector<float> wfVertices = wireframeLinesToVertices(wfLines);
-                GLuint wfVAO, wfVBO;
-                glGenVertexArrays(1, &wfVAO);
-                glGenBuffers(1, &wfVBO);
-                glBindVertexArray(wfVAO);
-                glBindBuffer(GL_ARRAY_BUFFER, wfVBO);
-                glBufferData(GL_ARRAY_BUFFER, wfVertices.size() * sizeof(float), wfVertices.data(), GL_STATIC_DRAW);
-                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-                glEnableVertexAttribArray(0);
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-                glEnableVertexAttribArray(1);
+
+        if (solidMesh && solidMesh->vao != 0) {
+            glBindVertexArray(solidMesh->vao);
+            glDrawArrays(GL_TRIANGLES, 0, solidMesh->vertexCount);
+        }
+
+        // Wireframe overlay for selected elements
+        if (isSelected && !forExport && elem->type != ElementType::ImportedMesh) {
+            CachedMesh& wf = prototypeWireframe[typeIdx];
+            if (wf.vao != 0) {
+                glBindVertexArray(wf.vao);
                 glLineWidth(1.4f);
                 gridShader.setVec3("uColor", glm::vec3(0.2f, 1.0f, 0.2f));
                 gridShader.setFloat("uAlpha", 1.0f);
-                glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(wfVertices.size() / 6));
+                glDrawArrays(GL_LINES, 0, wf.vertexCount);
                 glLineWidth(1.0f);
-                glDeleteVertexArrays(1, &wfVAO);
-                glDeleteBuffers(1, &wfVBO);
             }
         }
-        
-        glDeleteVertexArrays(1, &shapeVAO);
-        glDeleteBuffers(1, &shapeVBO);
     }
-    
+
+    glBindVertexArray(0);
     glLineWidth(1.0f);
 }
 
@@ -801,6 +848,26 @@ void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+    gridShader.setMat4("uModel", glm::mat4(1.0f));
+    gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
+    gridShader.setVec3("uLightPos", camera.position);
+    gridShader.setVec3("uViewPos", camera.position);
+
+    // Lazy-init reusable beam buffer
+    if (beamBuffer.vao == 0) {
+        glGenVertexArrays(1, &beamBuffer.vao);
+        glGenBuffers(1, &beamBuffer.vbo);
+        glBindVertexArray(beamBuffer.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    glBindVertexArray(beamBuffer.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
 
     for (const auto& beam : scene->getBeams()) {
         if (!beam->visible) continue;
@@ -808,37 +875,20 @@ void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
         bool isSelected = (selectedBeam == beam.get());
         glLineWidth(isSelected ? 4.0f : 2.0f);
 
-        // Create line vertices (position + normal)
-        std::vector<float> vertices = {
+        float vertices[12] = {
             beam->start.x, beam->start.y, beam->start.z, 0.0f, 0.0f, 1.0f,
             beam->end.x, beam->end.y, beam->end.z, 0.0f, 0.0f, 1.0f
         };
 
-        glm::mat4 model = glm::mat4(1.0f);
-        gridShader.setMat4("uModel", model);
-        // Selected beam renders white, otherwise its own color
         gridShader.setVec3("uColor", isSelected ? glm::vec3(1.0f, 1.0f, 1.0f) : beam->color);
         gridShader.setFloat("uAlpha", 1.0f);
 
-        GLuint beamVAO, beamVBO;
-        glGenVertexArrays(1, &beamVAO);
-        glGenBuffers(1, &beamVBO);
-
-        glBindVertexArray(beamVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-
+        // Buffer orphaning: upload new data into existing buffer
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
         glDrawArrays(GL_LINES, 0, 2);
-
-        glDeleteVertexArrays(1, &beamVAO);
-        glDeleteBuffers(1, &beamVBO);
     }
 
+    glBindVertexArray(0);
     glLineWidth(1.0f);
 }
 
@@ -846,36 +896,38 @@ void Viewport::renderBeam(const Beam& beam) {
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
-    
-    std::vector<float> vertices = {
+    gridShader.setMat4("uModel", glm::mat4(1.0f));
+    gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
+    gridShader.setVec3("uLightPos", camera.position);
+    gridShader.setVec3("uViewPos", camera.position);
+    gridShader.setVec3("uColor", beam.color);
+    gridShader.setFloat("uAlpha", 0.7f);
+
+    // Lazy-init reusable beam buffer
+    if (beamBuffer.vao == 0) {
+        glGenVertexArrays(1, &beamBuffer.vao);
+        glGenBuffers(1, &beamBuffer.vbo);
+        glBindVertexArray(beamBuffer.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    float vertices[12] = {
         beam.start.x, beam.start.y, beam.start.z, 0.0f, 0.0f, 1.0f,
         beam.end.x, beam.end.y, beam.end.z, 0.0f, 0.0f, 1.0f
     };
-    
-    glm::mat4 model = glm::mat4(1.0f);
-    gridShader.setMat4("uModel", model);
-    gridShader.setVec3("uColor", beam.color);
-    gridShader.setFloat("uAlpha", 0.7f); // Semi-transparent for preview
-    
-    GLuint beamVAO, beamVBO;
-    glGenVertexArrays(1, &beamVAO);
-    glGenBuffers(1, &beamVBO);
-    
-    glBindVertexArray(beamVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    
+
+    glBindVertexArray(beamBuffer.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
     glLineWidth(beam.width);
     glDrawArrays(GL_LINES, 0, 2);
     glLineWidth(1.0f);
-    
-    glDeleteVertexArrays(1, &beamVAO);
-    glDeleteBuffers(1, &beamVBO);
+    glBindVertexArray(0);
 }
 
 void Viewport::renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle) {
