@@ -2,6 +2,7 @@
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/basic_elements.h"
+#include "render/beam.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <fstream>
@@ -70,6 +71,21 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "layer " << e.layer << "\n";
         f << "end\n";
     }
+    // Save beams
+    for (const auto& beam : scene->getBeams()) {
+        if (!beam) continue;
+        const Beam& b = *beam;
+        f << "beam\n";
+        f << "id " << b.id << "\n";
+        f << "label " << b.label << "\n";
+        f << "start " << b.start.x << " " << b.start.y << " " << b.start.z << "\n";
+        f << "end " << b.end.x << " " << b.end.y << " " << b.end.z << "\n";
+        f << "color " << b.color.x << " " << b.color.y << " " << b.color.z << "\n";
+        f << "width " << b.width << "\n";
+        f << "visible " << (b.visible ? 1 : 0) << "\n";
+        f << "layer " << b.layer << "\n";
+        f << "end\n";
+    }
     f.flush();
     return f.good();
 }
@@ -130,6 +146,57 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     return true;
 }
 
+static bool parseBeamBlock(std::istream& in, Scene* scene) {
+    std::string id, label;
+    float sx = 0, sy = 0, sz = 0;
+    float ex = 0, ey = 0, ez = 0;
+    float cr = 1.0f, cg = 0.2f, cb = 0.2f;
+    float width = 2.0f;
+    int visible = 1, layer = 0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 3, "id ") == 0) {
+            id = line.substr(3);
+            trim(id);
+        } else if (line.compare(0, 6, "label ") == 0) {
+            label = line.substr(6);
+            trim(label);
+        } else if (line.compare(0, 6, "start ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> sx >> sy >> sz;
+        } else if (line.compare(0, 4, "end ") == 0 && line.length() > 4) {
+            std::istringstream ls(line.substr(4));
+            ls >> ex >> ey >> ez;
+        } else if (line.compare(0, 6, "color ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> cr >> cg >> cb;
+        } else if (line.compare(0, 6, "width ") == 0) {
+            width = std::stof(line.substr(6));
+        } else if (line.compare(0, 8, "visible ") == 0) {
+            visible = std::stoi(line.substr(8));
+        } else if (line.compare(0, 6, "layer ") == 0) {
+            layer = std::stoi(line.substr(6));
+        }
+    }
+
+    auto beam = std::make_unique<Beam>(id);
+    beam->label = label;
+    beam->start = glm::vec3(sx, sy, sz);
+    beam->end = glm::vec3(ex, ey, ez);
+    beam->color = glm::vec3(cr, cg, cb);
+    beam->width = width;
+    beam->visible = (visible != 0);
+    beam->layer = layer;
+
+    scene->addBeam(std::move(beam));
+    return true;
+}
+
 bool loadProject(const std::string& path, Scene* scene) {
     if (!scene) return false;
     std::ifstream f(path);
@@ -148,6 +215,8 @@ bool loadProject(const std::string& path, Scene* scene) {
         trim(line);
         if (line == "element") {
             if (!parseElementBlock(f, scene)) return false;
+        } else if (line == "beam") {
+            if (!parseBeamBlock(f, scene)) return false;
         }
     }
     return true;

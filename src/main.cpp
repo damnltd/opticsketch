@@ -16,6 +16,7 @@
 #include "render/viewport.h"
 #include "render/raycast.h"
 #include "render/gizmo.h"
+#include "render/beam.h"
 #include "scene/scene.h"
 #include "project/project.h"
 #include "elements/basic_elements.h"
@@ -48,6 +49,7 @@ static std::string trimPath(const char* path) {
 // Input state
 struct InputState {
     bool leftMouseDown = false;
+    bool leftMouseJustPressed = false;  // true only on the frame LMB transitions from up to down
     bool middleMouseDown = false;
     bool rightMouseDown = false;
     double lastMouseX = 0.0;
@@ -87,36 +89,11 @@ struct AppState {
     opticsketch::Viewport* viewport = nullptr;
 };
 
-// Mouse callback
-void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
-    if (!app) return;
-    
-    if (action == GLFW_PRESS) {
-        if (button == GLFW_MOUSE_BUTTON_LEFT) {
-            app->input.leftMouseDown = true;
-            app->input.wasDragging = false; // Reset drag state on new press
-        }
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE) app->input.middleMouseDown = true;
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) app->input.rightMouseDown = true;
-    } else if (action == GLFW_RELEASE) {
-        if (button == GLFW_MOUSE_BUTTON_LEFT) app->input.leftMouseDown = false;
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE) app->input.middleMouseDown = false;
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) app->input.rightMouseDown = false;
-        
-        // Stop dragging when any button is released
-        if (!app->input.leftMouseDown && !app->input.middleMouseDown && !app->input.rightMouseDown) {
-            app->input.isDraggingCamera = false;
-            app->input.wasDragging = false;
-        }
-    }
-}
-
-// Scroll callback - still use scroll wheel for zoom (even without CTRL)
+// Scroll callback - scroll wheel for zoom (even without CTRL)
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
     if (!app || !app->viewport) return;
-    
+
     if (!ImGui::GetIO().WantCaptureMouse) {
         app->viewport->getCamera().zoom(static_cast<float>(yoffset));
     }
@@ -171,23 +148,24 @@ int main() {
     AppState app;
     app.viewport = &viewport;
     glfwSetWindowUserPointer(window, &app);
-    glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-    
+
     // Initialize mouse position
     double initMouseX, initMouseY;
     glfwGetCursorPos(window, &initMouseX, &initMouseY);
     app.input.lastMouseX = initMouseX;
     app.input.lastMouseY = initMouseY;
-    
+
+    // Register scroll callback BEFORE ImGui — ImGui chains to it
+    glfwSetScrollCallback(window, scrollCallback);
+
     // ImGui init
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;    // Enable docking
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // Multi-viewport (optional)
-    
-    // Setup Platform/Renderer backends
+
+    // Setup Platform/Renderer backends — installs ImGui callbacks that chain to ours
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
     
@@ -207,7 +185,33 @@ int main() {
     // Main loop
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
-        
+
+        // Poll mouse buttons — avoids callback ordering issues with ImGui
+        {
+            bool prevLeft = app.input.leftMouseDown;
+            bool prevMiddle = app.input.middleMouseDown;
+            bool prevRight = app.input.rightMouseDown;
+
+            app.input.leftMouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            app.input.middleMouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+            app.input.rightMouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+            // Detect press edge (was up, now down)
+            app.input.leftMouseJustPressed = app.input.leftMouseDown && !prevLeft;
+
+            if (app.input.leftMouseJustPressed) {
+                app.input.wasDragging = false;
+            }
+
+            // Stop camera drag when all buttons released
+            bool anyDown = app.input.leftMouseDown || app.input.middleMouseDown || app.input.rightMouseDown;
+            bool wasAnyDown = prevLeft || prevMiddle || prevRight;
+            if (wasAnyDown && !anyDown) {
+                app.input.isDraggingCamera = false;
+                app.input.wasDragging = false;
+            }
+        }
+
         // Update input state
         app.input.spacePressed = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         app.input.altPressed = glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
@@ -218,12 +222,13 @@ int main() {
             bool ctrl = app.input.ctrlPressed;
             bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
             
-            // Tool shortcuts (Q, W, E, R) - Maya style
-            static bool qPressed = false, wPressed = false, ePressed = false, rPressed = false;
+            // Tool shortcuts (Q, W, E, R, B) - Maya style
+            static bool qPressed = false, wPressed = false, ePressed = false, rPressed = false, bPressed = false;
             bool qNow = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
             bool wNow = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
             bool eNow = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
             bool rNow = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
+            bool bNow = glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS;
             
             if (qNow && !qPressed) {
                 toolboxPanel.setTool(opticsketch::ToolMode::Select);
@@ -237,11 +242,15 @@ int main() {
             if (rNow && !rPressed) {
                 toolboxPanel.setTool(opticsketch::ToolMode::Scale);
             }
+            if (bNow && !bPressed) {
+                toolboxPanel.setTool(opticsketch::ToolMode::DrawBeam);
+            }
             
             qPressed = qNow;
             wPressed = wNow;
             ePressed = eNow;
             rPressed = rNow;
+            bPressed = bNow;
             
             // File shortcuts
             if (ctrl && glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) {
@@ -307,6 +316,8 @@ int main() {
             if ((delNow && !delPressed) || (backNow && !backPressed)) {
                 if (scene.getSelectedElement()) {
                     scene.removeElement(scene.getSelectedElement()->id);
+                } else if (scene.getSelectedBeam()) {
+                    scene.removeBeam(scene.getSelectedBeam()->id);
                 }
             }
             delPressed = delNow;
@@ -416,10 +427,11 @@ int main() {
                     // TODO: Paste
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del", false, scene.getSelectedElement() != nullptr)) {
-                    // TODO: Delete selected element
+                if (ImGui::MenuItem("Delete", "Del", false, scene.getSelectedElement() != nullptr || scene.getSelectedBeam() != nullptr)) {
                     if (scene.getSelectedElement()) {
                         scene.removeElement(scene.getSelectedElement()->id);
+                    } else if (scene.getSelectedBeam()) {
+                        scene.removeBeam(scene.getSelectedBeam()->id);
                     }
                 }
                 ImGui::Separator();
@@ -508,7 +520,7 @@ int main() {
                 // Open website in default browser
                 #ifdef PLATFORM_LINUX
                     std::system("xdg-open http://www.damnltd.com");
-                #elif defined(_WIN32)
+                #elif defined(PLATFORM_WINDOWS)
                     std::system("start http://www.damnltd.com");
                 #elif defined(__APPLE__)
                     std::system("open http://www.damnltd.com");
@@ -627,8 +639,77 @@ int main() {
             if (!app.input.leftMouseDown) manipDrag.active = false;
             static bool selectionBoxActive = false;
             static float selectionBoxStartX = 0.0f, selectionBoxStartY = 0.0f;
-            bool clickInViewport = inViewport && app.input.leftMouseDown;
-            if (!ctrlPressed && clickInViewport && !app.input.isDraggingCamera) {
+            bool clickStartedInViewport = inViewport && app.input.leftMouseJustPressed
+                                          && !ImGui::GetDragDropPayload();
+            
+            // Beam drawing mode: click to place beam points
+            static glm::vec3 beamStartPoint;
+            static bool beamDrawingActive = false;
+            static bool beamStartPlaced = false;
+            static glm::vec3 beamPreviewEnd;
+            
+            // Update preview end point when hovering in DrawBeam mode
+            if (currentTool == opticsketch::ToolMode::DrawBeam && inViewport && beamStartPlaced) {
+                opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                float t = -ray.origin.y / ray.direction.y;
+                if (t > 0.0f && std::abs(ray.direction.y) > 1e-5f) {
+                    beamPreviewEnd = ray.origin + t * ray.direction;
+                }
+            }
+            
+            if (currentTool == opticsketch::ToolMode::DrawBeam && clickStartedInViewport && !ctrlPressed && !app.input.isDraggingCamera) {
+                opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                
+                // Intersect with ground plane (Y=0) for beam placement
+                float t = -ray.origin.y / ray.direction.y;
+                if (t > 0.0f && std::abs(ray.direction.y) > 1e-5f) {
+                    glm::vec3 hitPoint = ray.origin + t * ray.direction;
+                    
+                    if (!beamStartPlaced) {
+                        // Place first point
+                        beamStartPoint = hitPoint;
+                        beamPreviewEnd = hitPoint;
+                        beamStartPlaced = true;
+                        beamDrawingActive = true;
+                    } else {
+                        // Place second point and create beam
+                        auto beam = std::make_unique<opticsketch::Beam>();
+                        beam->start = beamStartPoint;
+                        beam->end = hitPoint;
+                        beam->color = glm::vec3(1.0f, 0.2f, 0.2f); // Red laser beam
+                        std::string beamId = beam->id;
+                        scene.addBeam(std::move(beam));
+                        scene.selectBeam(beamId);
+                        
+                        // Reset for next beam
+                        beamStartPlaced = false;
+                        beamDrawingActive = false;
+                    }
+                }
+            }
+            
+            // Reset beam drawing if tool changes
+            if (currentTool != opticsketch::ToolMode::DrawBeam) {
+                beamStartPlaced = false;
+                beamDrawingActive = false;
+            }
+            
+            // Store preview beam for rendering (don't add to scene)
+            static opticsketch::Beam* previewBeamPtr = nullptr;
+            static opticsketch::Beam previewBeam;
+            if (currentTool == opticsketch::ToolMode::DrawBeam && beamStartPlaced) {
+                previewBeam.start = beamStartPoint;
+                previewBeam.end = beamPreviewEnd;
+                previewBeam.color = glm::vec3(1.0f, 0.5f, 0.5f); // Lighter red for preview
+                previewBeam.width = 1.5f;
+                previewBeamPtr = &previewBeam;
+            } else {
+                previewBeamPtr = nullptr;
+            }
+            
+            if (!ctrlPressed && clickStartedInViewport && !app.input.isDraggingCamera && currentTool != opticsketch::ToolMode::DrawBeam) {
                 int hoveredHandle = -1;
                 if (selectedElem && currentTool != opticsketch::ToolMode::Select) {
                     opticsketch::GizmoType gType = (currentTool == opticsketch::ToolMode::Move) ? opticsketch::GizmoType::Move :
@@ -683,8 +764,15 @@ int main() {
                         }
                     }
                 } else {
-                    bool mouseOnSelectedObject = false;
-                    if (currentTool != opticsketch::ToolMode::Select && selectedElem) {
+                    if (currentTool == opticsketch::ToolMode::Select) {
+                        // Start selection box in Select tool
+                        if (!selectionBoxActive && inViewport) {
+                            selectionBoxStartX = viewportX;
+                            selectionBoxStartY = viewportY;
+                            selectionBoxActive = true;
+                        }
+                    } else {
+                        // In Move/Rotate/Scale mode: click-select another object (gizmo stays with new selection)
                         opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
                             viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                         float closestT = std::numeric_limits<float>::max();
@@ -700,14 +788,29 @@ int main() {
                                 }
                             }
                         }
-                        mouseOnSelectedObject = (closestElement == selectedElem);
-                    }
-                    if (!selectionBoxActive && inViewport && !mouseOnSelectedObject) {
-                        selectionBoxStartX = viewportX;
-                        selectionBoxStartY = viewportY;
-                        selectionBoxActive = true;
+                        // Also test beams (ray-to-segment distance)
+                        opticsketch::Beam* closestBeam = nullptr;
+                        float beamPickThreshold = 0.3f; // world-space pick radius
+                        float bestBeamDist = beamPickThreshold * beamPickThreshold;
+                        for (const auto& beam : scene.getBeams()) {
+                            if (!beam->visible) continue;
+                            float tRay, tSeg;
+                            float sqDist = opticsketch::Raycast::rayToSegmentSqDist(ray, beam->start, beam->end, tRay, tSeg);
+                            if (sqDist < bestBeamDist && tRay > 0.0f) {
+                                bestBeamDist = sqDist;
+                                closestBeam = beam.get();
+                            }
+                        }
+                        // Elements take priority over beams
+                        if (closestElement) scene.selectElement(closestElement->id);
+                        else if (closestBeam) scene.selectBeam(closestBeam->id);
+                        else scene.deselectAll();
                     }
                 }
+            }
+            // Cancel rectangle selection when mouse leaves viewport
+            if (selectionBoxActive && !inViewport) {
+                selectionBoxActive = false;
             }
             if (selectionBoxActive && !app.input.leftMouseDown) {
                 const float dragThreshold = 5.0f;
@@ -764,7 +867,30 @@ int main() {
                             bestElem = elem.get();
                         }
                     }
+                    // Also test beams (project both endpoints)
+                    opticsketch::Beam* bestBeam = nullptr;
+                    float bestBeamDepth = std::numeric_limits<float>::max();
+                    for (const auto& beam : scene.getBeams()) {
+                        if (!beam->visible) continue;
+                        float sv, ev;
+                        float svx, svy, evx, evy;
+                        bool startVis = worldToViewport(beam->start, svx, svy);
+                        bool endVis = worldToViewport(beam->end, evx, evy);
+                        if (!startVis && !endVis) continue;
+                        float bminVx = std::min(svx, evx), bmaxVx = std::max(svx, evx);
+                        float bminVy = std::min(svy, evy), bmaxVy = std::max(svy, evy);
+                        bool overlaps = (rminX <= bmaxVx && rmaxX >= bminVx && rminY <= bmaxVy && rmaxY >= bminVy);
+                        if (!overlaps) continue;
+                        glm::vec3 mid = (beam->start + beam->end) * 0.5f;
+                        float depth = glm::length(mid - cam.position);
+                        if (depth < bestBeamDepth) {
+                            bestBeamDepth = depth;
+                            bestBeam = beam.get();
+                        }
+                    }
+                    // Elements take priority
                     if (bestElem) scene.selectElement(bestElem->id);
+                    else if (bestBeam) scene.selectBeam(bestBeam->id);
                     else scene.deselectAll();
                 } else {
                     opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(cam, selectionBoxStartX, selectionBoxStartY, vpWidth, vpHeight);
@@ -781,7 +907,21 @@ int main() {
                             }
                         }
                     }
+                    // Also test beams
+                    opticsketch::Beam* closestBeam = nullptr;
+                    float beamPickThreshold = 0.3f;
+                    float bestBeamDist = beamPickThreshold * beamPickThreshold;
+                    for (const auto& beam : scene.getBeams()) {
+                        if (!beam->visible) continue;
+                        float tRay, tSeg;
+                        float sqDist = opticsketch::Raycast::rayToSegmentSqDist(ray, beam->start, beam->end, tRay, tSeg);
+                        if (sqDist < bestBeamDist && tRay > 0.0f) {
+                            bestBeamDist = sqDist;
+                            closestBeam = beam.get();
+                        }
+                    }
                     if (closestElement) scene.selectElement(closestElement->id);
+                    else if (closestBeam) scene.selectBeam(closestBeam->id);
                     else scene.deselectAll();
                 }
                 selectionBoxActive = false;
@@ -884,6 +1024,12 @@ int main() {
             viewport.beginFrame();
             viewport.renderGrid(25.0f, 100);
             viewport.renderScene(&scene);
+            viewport.renderBeams(&scene, scene.getSelectedBeam());
+            
+            // Render preview beam if drawing (using the previewBeam declared earlier)
+            if (currentTool == opticsketch::ToolMode::DrawBeam && beamStartPlaced && previewBeamPtr) {
+                viewport.renderBeam(*previewBeamPtr);
+            }
             
             // Render gizmo if element is selected and tool is not Select (hovered axis highlighted from previous frame)
             if (scene.getSelectedElement() && toolboxPanel.getCurrentTool() != opticsketch::ToolMode::Select) {
@@ -917,11 +1063,22 @@ int main() {
                     if (payload->DataSize == sizeof(opticsketch::ElementType)) {
                         opticsketch::ElementType type = *(const opticsketch::ElementType*)payload->Data;
                         
-                        // Create element at viewport center (for now)
                         auto elem = opticsketch::createElement(type);
                         if (elem) {
-                            // TODO: Convert viewport coordinates to world coordinates
-                            elem->transform.position = glm::vec3(0.0f, 0.0f, 0.0f);
+                            // Ray-cast from viewport center to Y=0 ground plane
+                            glm::vec3 dropPos(0.0f, 0.0f, 0.0f);
+                            float centerX = vpWidth * 0.5f;
+                            float centerY = vpHeight * 0.5f;
+                            opticsketch::Raycast::Ray dropRay = opticsketch::Raycast::screenToRay(
+                                viewport.getCamera(), centerX, centerY, vpWidth, vpHeight);
+                            if (std::abs(dropRay.direction.y) > 1e-5f) {
+                                float t = -dropRay.origin.y / dropRay.direction.y;
+                                if (t > 0.0f) {
+                                    dropPos = dropRay.origin + t * dropRay.direction;
+                                    dropPos.y = 0.0f;
+                                }
+                            }
+                            elem->transform.position = dropPos;
                             scene.addElement(std::move(elem));
                         }
                     }
