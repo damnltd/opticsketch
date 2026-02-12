@@ -62,24 +62,20 @@ void LibraryPanel::render() {
         return;
     }
     
-    // Category filter - compact dropdown
+    // Category filter - tabs
     const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Filters", "Apertures", "Prisms", "Detectors", "Fiber", "Mounts", "Imported"};
     const int numCategories = 12;
 
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##Category", selectedCategory.c_str())) {
+    if (ImGui::BeginTabBar("##CategoryTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton)) {
         for (int i = 0; i < numCategories; i++) {
-            bool isSelected = (selectedCategory == categories[i]);
-            if (ImGui::Selectable(categories[i], isSelected)) {
+            if (ImGui::BeginTabItem(categories[i])) {
                 selectedCategory = categories[i];
+                ImGui::EndTabItem();
             }
-            if (isSelected) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ImGui::EndTabBar();
     }
-    
-    ImGui::Spacing();
-    ImGui::Separator();
+
     ImGui::Spacing();
     
     // Search bar - full width
