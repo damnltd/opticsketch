@@ -14,6 +14,14 @@ static const char* elementTypeLabel(ElementType type) {
         case ElementType::Lens:          return "Lens";
         case ElementType::BeamSplitter:  return "Beam Splitter";
         case ElementType::Detector:      return "Detector";
+        case ElementType::Filter:        return "Filter";
+        case ElementType::Aperture:      return "Aperture";
+        case ElementType::Prism:         return "Prism";
+        case ElementType::PrismRA:       return "Prism RA";
+        case ElementType::Grating:       return "Grating";
+        case ElementType::FiberCoupler:  return "Fiber Coupler";
+        case ElementType::Screen:        return "Screen";
+        case ElementType::Mount:         return "Mount";
         case ElementType::ImportedMesh:  return "Mesh";
         default:                         return "?";
     }
@@ -67,6 +75,7 @@ void PropertiesPanel::render(Scene* scene) {
     ImGui::Text("State");
     ImGui::Separator();
     ImGui::Checkbox("Visible", &elem->visible);
+    ImGui::Checkbox("Show Label", &elem->showLabel);
     ImGui::Checkbox("Locked", &elem->locked);
     ImGui::DragInt("Layer", &elem->layer, 1, 0, 255);
 

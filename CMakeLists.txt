@@ -163,6 +163,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+# tinyobjloader - OBJ mesh import
+FetchContent_Declare(
+    tinyobjloader
+    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+    GIT_TAG release
+)
+FetchContent_MakeAvailable(tinyobjloader)
+
 # Executable
 add_executable(${PROJECT_NAME}
     src/main.cpp
@@ -177,6 +185,8 @@ add_executable(${PROJECT_NAME}
     src/render/shader.cpp
     src/render/viewport.cpp
     src/render/beam.cpp
+    src/render/mesh_loader.cpp
+    src/undo/undo.cpp
     src/export/export_png.cpp
     src/elements/element.cpp
     src/elements/basic_elements.cpp
@@ -191,6 +201,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${stb_SOURCE_DIR}
+    ${tinyobjloader_SOURCE_DIR}
 )
 
 # Enable ImGui docking

@@ -93,8 +93,9 @@ private:
     bool gridInitialized = false;
 
     // Cached geometry for built-in element types (indexed by (int)ElementType)
-    CachedMesh prototypeGeometry[6];
-    CachedMesh prototypeWireframe[6];
+    static constexpr int kMaxPrototypes = 16;
+    CachedMesh prototypeGeometry[kMaxPrototypes];
+    CachedMesh prototypeWireframe[kMaxPrototypes];
     bool prototypesInitialized = false;
 
     // Per-instance mesh cache for ImportedMesh elements (keyed by element ID)

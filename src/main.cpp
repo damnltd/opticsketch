@@ -470,6 +470,8 @@ int main() {
         static bool showAboutDialog = false;
         static bool aboutDialogOpen = false;
         static bool viewportWindowVisible = true;
+        static bool showViewportLabels = true;
+        static bool showGridScale = true;
 
         // Menu bar
         if (ImGui::BeginMainMenuBar()) {
@@ -648,6 +650,9 @@ int main() {
                 if (ImGui::MenuItem("Reset View", "Home")) {
                     viewport.getCamera().resetView();
                 }
+                ImGui::Separator();
+                ImGui::MenuItem("Show Labels", nullptr, &showViewportLabels);
+                ImGui::MenuItem("Show Grid Scale", nullptr, &showGridScale);
                 ImGui::EndMenu();
             }
             
@@ -1325,6 +1330,80 @@ int main() {
                 dl->AddRect(pmin, pmax, IM_COL32(255, 255, 255, 200), 0.0f, 0, 2.0f);
             }
             
+            // --- Viewport element label overlay ---
+            if (showViewportLabels) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                for (const auto& elem : scene.getElements()) {
+                    if (!elem->visible || !elem->showLabel) continue;
+                    glm::vec3 center = elem->getWorldBoundsCenter();
+                    glm::vec4 clip = vpMat * glm::vec4(center, 1.0f);
+                    if (clip.w <= 0.0f) continue; // behind camera
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    float sy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    // Clamp to viewport bounds
+                    if (sx < imageMin.x || sx > imageMin.x + viewportSize.x ||
+                        sy < imageMin.y || sy > imageMin.y + viewportSize.y) continue;
+                    const char* labelText = elem->label.c_str();
+                    ImVec2 textSz = ImGui::CalcTextSize(labelText);
+                    float lx = sx - textSz.x * 0.5f;
+                    float ly = sy - textSz.y - 6.0f; // above the element
+                    dl->AddRectFilled(ImVec2(lx - 3, ly - 1), ImVec2(lx + textSz.x + 3, ly + textSz.y + 1),
+                                      IM_COL32(20, 20, 25, 180), 3.0f);
+                    dl->AddText(ImVec2(lx, ly), IM_COL32(220, 220, 230, 255), labelText);
+                }
+            }
+
+            // --- Grid scale indicator ---
+            if (showGridScale) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                float gridSpacing = 25.0f; // mm, matches renderGrid default
+                ImU32 tickCol = IM_COL32(180, 180, 190, 160);
+                ImU32 textCol = IM_COL32(160, 160, 170, 200);
+
+                // Bottom edge: X axis ticks
+                for (int g = -100; g <= 100; g++) {
+                    float worldX = g * gridSpacing;
+                    glm::vec4 clip = vpMat * glm::vec4(worldX, 0.0f, 0.0f, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    float bottomY = imageMin.y + viewportSize.y;
+                    if (sx < imageMin.x || sx > imageMin.x + viewportSize.x) continue;
+                    bool major = (g % 4 == 0);
+                    float tickH = major ? 8.0f : 4.0f;
+                    dl->AddLine(ImVec2(sx, bottomY - tickH), ImVec2(sx, bottomY), tickCol);
+                    if (major) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%dmm", (int)worldX);
+                        ImVec2 tsz = ImGui::CalcTextSize(buf);
+                        dl->AddText(ImVec2(sx - tsz.x * 0.5f, bottomY - tickH - tsz.y - 1), textCol, buf);
+                    }
+                }
+
+                // Left edge: Z axis ticks
+                for (int g = -100; g <= 100; g++) {
+                    float worldZ = g * gridSpacing;
+                    glm::vec4 clip = vpMat * glm::vec4(0.0f, 0.0f, worldZ, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    float leftX = imageMin.x;
+                    if (sy < imageMin.y || sy > imageMin.y + viewportSize.y) continue;
+                    bool major = (g % 4 == 0);
+                    float tickW = major ? 8.0f : 4.0f;
+                    dl->AddLine(ImVec2(leftX, sy), ImVec2(leftX + tickW, sy), tickCol);
+                    if (major) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%d", (int)worldZ);
+                        ImVec2 tsz = ImGui::CalcTextSize(buf);
+                        dl->AddText(ImVec2(leftX + tickW + 2, sy - tsz.y * 0.5f), textCol, buf);
+                    }
+                }
+            }
+
             bool shouldDrag = isViewportHovered && ctrlPressed && !manipDrag.active &&
                              (app.input.leftMouseDown || app.input.middleMouseDown || app.input.rightMouseDown);
             

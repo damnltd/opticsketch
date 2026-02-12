@@ -13,11 +13,45 @@ LibraryPanel::LibraryPanel() {
 
 void LibraryPanel::loadBuiltinLibrary() {
     items = {
-        {"laser_generic", "Generic Laser", "Sources", ElementType::Laser, ""},
-        {"mirror_flat", "Flat Mirror", "Mirrors", ElementType::Mirror, ""},
-        {"lens_planoconvex", "Plano-Convex Lens", "Lenses", ElementType::Lens, ""},
-        {"beamsplitter_cube", "50:50 Beam Splitter", "Beam Splitters", ElementType::BeamSplitter, ""},
-        {"detector_photodiode", "Photodiode", "Detectors", ElementType::Detector, ""}
+        // Sources
+        {"laser_hene", "HeNe Laser", "Sources", ElementType::Laser, ""},
+        {"laser_diode", "Diode Laser", "Sources", ElementType::Laser, ""},
+        {"laser_led", "LED Source", "Sources", ElementType::Laser, ""},
+        {"fiber_output", "Fiber Output", "Fiber", ElementType::FiberCoupler, ""},
+        // Mirrors
+        {"mirror_flat_1in", "Flat Mirror 1\"", "Mirrors", ElementType::Mirror, ""},
+        {"mirror_flat_2in", "Flat Mirror 2\"", "Mirrors", ElementType::Mirror, ""},
+        {"mirror_concave", "Concave Mirror", "Mirrors", ElementType::Mirror, ""},
+        {"mirror_convex", "Convex Mirror", "Mirrors", ElementType::Mirror, ""},
+        // Lenses
+        {"lens_pcx_25", "Plano-Convex 25mm", "Lenses", ElementType::Lens, ""},
+        {"lens_pcx_50", "Plano-Convex 50mm", "Lenses", ElementType::Lens, ""},
+        {"lens_pcx_100", "Plano-Convex 100mm", "Lenses", ElementType::Lens, ""},
+        {"lens_pcc", "Plano-Concave", "Lenses", ElementType::Lens, ""},
+        {"lens_biconvex", "Bi-Convex", "Lenses", ElementType::Lens, ""},
+        // Beam Splitters
+        {"bs_cube_5050", "50:50 Cube BS", "Beam Splitters", ElementType::BeamSplitter, ""},
+        {"bs_plate_5050", "50:50 Plate BS", "Beam Splitters", ElementType::BeamSplitter, ""},
+        {"bs_pbs_cube", "PBS Cube", "Beam Splitters", ElementType::BeamSplitter, ""},
+        // Filters
+        {"filter_nd", "ND Filter", "Filters", ElementType::Filter, ""},
+        {"filter_polarizer", "Linear Polarizer", "Filters", ElementType::Filter, ""},
+        {"filter_hwp", "Half-Wave Plate", "Filters", ElementType::Filter, ""},
+        {"filter_qwp", "Quarter-Wave Plate", "Filters", ElementType::Filter, ""},
+        // Apertures
+        {"aperture_iris", "Iris Diaphragm", "Apertures", ElementType::Aperture, ""},
+        {"aperture_pinhole", "Pinhole", "Apertures", ElementType::Aperture, ""},
+        {"aperture_slit", "Single Slit", "Apertures", ElementType::Aperture, ""},
+        // Prisms
+        {"prism_equilateral", "Equilateral Prism", "Prisms", ElementType::Prism, ""},
+        {"prism_rightangle", "Right-Angle Prism", "Prisms", ElementType::PrismRA, ""},
+        // Detectors
+        {"detector_photodiode", "Photodiode", "Detectors", ElementType::Detector, ""},
+        {"detector_screen", "Camera/Screen", "Detectors", ElementType::Screen, ""},
+        {"detector_powermeter", "Power Meter", "Detectors", ElementType::Detector, ""},
+        // Mounts
+        {"mount_post", "Optical Post", "Mounts", ElementType::Mount, ""},
+        {"mount_mirror", "Mirror Mount", "Mounts", ElementType::Mount, ""},
     };
 }
 
@@ -28,31 +62,21 @@ void LibraryPanel::render() {
         return;
     }
     
-    // Category tabs - Unity/Unreal style horizontal buttons
-    const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Detectors", "Imported"};
-    const int numCategories = 7;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12, 6));
+    // Category filter - compact dropdown
+    const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Filters", "Apertures", "Prisms", "Detectors", "Fiber", "Mounts", "Imported"};
+    const int numCategories = 12;
 
-    for (int i = 0; i < numCategories; i++) {
-        if (i > 0) ImGui::SameLine();
-        bool selected = (selectedCategory == categories[i]);
-        
-        if (selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##Category", selectedCategory.c_str())) {
+        for (int i = 0; i < numCategories; i++) {
+            bool isSelected = (selectedCategory == categories[i]);
+            if (ImGui::Selectable(categories[i], isSelected)) {
+                selectedCategory = categories[i];
+            }
+            if (isSelected) ImGui::SetItemDefaultFocus();
         }
-        
-        if (ImGui::Button(categories[i])) {
-            selectedCategory = categories[i];
-        }
-        
-        ImGui::PopStyleColor(selected ? 2 : 1);
+        ImGui::EndCombo();
     }
-    
-    ImGui::PopStyleVar(2);
     
     ImGui::Spacing();
     ImGui::Separator();
@@ -143,6 +167,46 @@ void LibraryPanel::renderElementItem(const LibraryItem& item) {
             borderColor = ImVec4(0.3f, 1.0f, 0.3f, 0.8f);
             icon = "◉";
             break;
+        case ElementType::Filter:
+            bgColor = ImVec4(0.15f, 0.1f, 0.2f, 0.6f);
+            borderColor = ImVec4(0.6f, 0.4f, 0.8f, 0.8f);
+            icon = "▮";
+            break;
+        case ElementType::Aperture:
+            bgColor = ImVec4(0.2f, 0.15f, 0.1f, 0.6f);
+            borderColor = ImVec4(0.8f, 0.6f, 0.3f, 0.8f);
+            icon = "⊙";
+            break;
+        case ElementType::Prism:
+            bgColor = ImVec4(0.1f, 0.15f, 0.18f, 0.6f);
+            borderColor = ImVec4(0.5f, 0.8f, 0.9f, 0.8f);
+            icon = "△";
+            break;
+        case ElementType::PrismRA:
+            bgColor = ImVec4(0.1f, 0.15f, 0.18f, 0.6f);
+            borderColor = ImVec4(0.5f, 0.8f, 0.9f, 0.8f);
+            icon = "◣";
+            break;
+        case ElementType::Grating:
+            bgColor = ImVec4(0.18f, 0.12f, 0.08f, 0.6f);
+            borderColor = ImVec4(0.7f, 0.5f, 0.3f, 0.8f);
+            icon = "≡";
+            break;
+        case ElementType::FiberCoupler:
+            bgColor = ImVec4(0.2f, 0.12f, 0.05f, 0.6f);
+            borderColor = ImVec4(1.0f, 0.6f, 0.2f, 0.8f);
+            icon = "⊳";
+            break;
+        case ElementType::Screen:
+            bgColor = ImVec4(0.1f, 0.2f, 0.1f, 0.6f);
+            borderColor = ImVec4(0.3f, 0.8f, 0.3f, 0.8f);
+            icon = "▭";
+            break;
+        case ElementType::Mount:
+            bgColor = ImVec4(0.12f, 0.12f, 0.14f, 0.6f);
+            borderColor = ImVec4(0.5f, 0.5f, 0.55f, 0.8f);
+            icon = "┃";
+            break;
         case ElementType::ImportedMesh:
             bgColor = ImVec4(0.15f, 0.15f, 0.15f, 0.6f);
             borderColor = ImVec4(0.7f, 0.7f, 0.7f, 0.8f);
@@ -191,8 +255,7 @@ void LibraryPanel::renderElementItem(const LibraryItem& item) {
         ImGui::EndDragDropSource();
     }
     
-    // Content overlay
-    ImGui::SetCursorPos(cursorPos);
+    // Content overlay (drawn via drawList, no cursor reset needed)
     ImGui::PushClipRect(screenPos, ImVec2(screenPos.x + cardSize.x, screenPos.y + cardSize.y), true);
     
     // Icon - centered at top

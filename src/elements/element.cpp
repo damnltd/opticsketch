@@ -12,6 +12,15 @@ Element::Element(ElementType t, const std::string& elementId)
         case ElementType::Lens: label = "Lens"; break;
         case ElementType::BeamSplitter: label = "Beam Splitter"; break;
         case ElementType::Detector: label = "Detector"; break;
+        case ElementType::Filter: label = "Filter"; break;
+        case ElementType::Aperture: label = "Aperture"; break;
+        case ElementType::Prism: label = "Prism"; break;
+        case ElementType::PrismRA: label = "Prism RA"; break;
+        case ElementType::Grating: label = "Grating"; break;
+        case ElementType::FiberCoupler: label = "Fiber Coupler"; break;
+        case ElementType::Screen: label = "Screen"; break;
+        case ElementType::Mount: label = "Mount"; break;
+        case ElementType::ImportedMesh: break;
     }
 }
 
@@ -53,6 +62,7 @@ std::unique_ptr<Element> Element::clone() const {
     e->transform = transform;
     e->locked = locked;
     e->visible = visible;
+    e->showLabel = showLabel;
     e->layer = layer;
     e->boundsMin = boundsMin;
     e->boundsMax = boundsMax;

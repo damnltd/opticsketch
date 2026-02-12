@@ -14,6 +14,14 @@ enum class ElementType {
     Lens,
     BeamSplitter,
     Detector,
+    Filter,
+    Aperture,
+    Prism,
+    PrismRA,
+    Grating,
+    FiberCoupler,
+    Screen,
+    Mount,
     ImportedMesh
 };
 
@@ -46,6 +54,7 @@ public:
     // State
     bool locked = false;
     bool visible = true;
+    bool showLabel = true;
     int layer = 0;
     
     // Bounds (for selection and rendering)

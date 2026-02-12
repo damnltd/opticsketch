@@ -9,10 +9,18 @@ static const char* elementTypeLabel(ElementType type) {
     switch (type) {
         case ElementType::Laser:         return "Laser";
         case ElementType::Mirror:        return "Mirror";
-        case ElementType::Lens:         return "Lens";
-        case ElementType::BeamSplitter: return "Beam Splitter";
-        case ElementType::Detector:     return "Detector";
-        case ElementType::ImportedMesh: return "Mesh";
+        case ElementType::Lens:          return "Lens";
+        case ElementType::BeamSplitter:  return "Beam Splitter";
+        case ElementType::Detector:      return "Detector";
+        case ElementType::Filter:        return "Filter";
+        case ElementType::Aperture:      return "Aperture";
+        case ElementType::Prism:         return "Prism";
+        case ElementType::PrismRA:       return "Prism RA";
+        case ElementType::Grating:       return "Grating";
+        case ElementType::FiberCoupler:  return "Fiber Coupler";
+        case ElementType::Screen:        return "Screen";
+        case ElementType::Mount:         return "Mount";
+        case ElementType::ImportedMesh:  return "Mesh";
         default:                         return "?";
     }
 }
