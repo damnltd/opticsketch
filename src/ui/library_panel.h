@@ -4,6 +4,7 @@
 #include <vector>
 #include <functional>
 #include <imgui.h>
+#include <glad/glad.h>
 #include "elements/element.h"
 
 namespace opticsketch {
@@ -20,13 +21,13 @@ struct LibraryItem {
 class LibraryPanel {
 public:
     LibraryPanel();
-    
+
     // Render the library panel UI
     void render();
-    
+
     bool isVisible() const { return visible; }
     void setVisible(bool v) { visible = v; }
-    
+
     // Add an imported OBJ item to the library
     void addImportedItem(const std::string& name, const std::string& objPath);
 
@@ -38,15 +39,21 @@ public:
         onElementDrag = callback;
     }
 
+    // Set 3D thumbnail texture for an element type
+    void setThumbnailTexture(int typeIndex, GLuint texId);
+
 private:
     bool visible = true;
     std::vector<LibraryItem> items;
     char searchText[256] = "";
     std::string selectedCategory = "All";
     float gridSize = 80.0f;
-    
+
+    // 3D thumbnail textures (indexed by ElementType)
+    GLuint thumbnailTextures[14] = {};
+
     std::function<void(ElementType, const std::string&)> onElementDrag;
-    
+
     void loadBuiltinLibrary();
     void renderElementGrid();
     void renderElementItem(const LibraryItem& item);

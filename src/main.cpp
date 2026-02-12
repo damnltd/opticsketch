@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <glm/gtc/quaternion.hpp>
 #include <tinyfiledialogs.h>
@@ -24,9 +25,13 @@
 #include "project/project.h"
 #include "elements/basic_elements.h"
 #include "elements/annotation.h"
+#include "elements/measurement.h"
 #include "undo/undo.h"
 #include "style/scene_style.h"
+#include "export/export_tikz.h"
+#include "export/export_svg.h"
 #include "input/shortcut_manager.h"
+#include "optics/ray_tracer.h"
 #include "ui/style_editor_panel.h"
 #include "ui/shortcuts_panel.h"
 #include "ui/template_panel.h"
@@ -44,6 +49,38 @@ static std::string ensurePngExtension(const std::string& path) {
     if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".png") == 0)
         return path;
     return path + ".png";
+}
+
+// Ensure path ends with .tex for TikZ export
+static std::string ensureTexExtension(const std::string& path) {
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".tex") == 0)
+        return path;
+    return path + ".tex";
+}
+
+// Ensure path ends with .jpg for JPEG export
+static std::string ensureJpgExtension(const std::string& path) {
+    if (path.size() >= 4 && (path.compare(path.size() - 4, 4, ".jpg") == 0 ||
+                             path.compare(path.size() - 4, 4, ".JPG") == 0))
+        return path;
+    if (path.size() >= 5 && (path.compare(path.size() - 5, 5, ".jpeg") == 0 ||
+                             path.compare(path.size() - 5, 5, ".JPEG") == 0))
+        return path;
+    return path + ".jpg";
+}
+
+// Ensure path ends with .pdf for PDF export
+static std::string ensurePdfExtension(const std::string& path) {
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".pdf") == 0)
+        return path;
+    return path + ".pdf";
+}
+
+// Ensure path ends with .svg for SVG export
+static std::string ensureSvgExtension(const std::string& path) {
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".svg") == 0)
+        return path;
+    return path + ".svg";
 }
 
 // Trim leading/trailing whitespace from path (tinyfd may return trailing newline etc.)
@@ -176,7 +213,13 @@ int main() {
     // Scene style (visual customization)
     opticsketch::SceneStyle sceneStyle;
     viewport.setStyle(&sceneStyle);
-    
+
+    // Generate 3D thumbnail previews for library panel
+    viewport.generateThumbnails();
+    for (int i = 0; i < (int)opticsketch::ElementType::ImportedMesh; i++) {
+        libraryPanel.setThumbnailTexture(i, viewport.getThumbnailTexture(i));
+    }
+
     // Application state
     AppState app;
     app.viewport = &viewport;
@@ -267,6 +310,8 @@ int main() {
                 toolboxPanel.setTool(opticsketch::ToolMode::DrawBeam);
             if (shortcutMgr.justPressed("tool.annotation"))
                 toolboxPanel.setTool(opticsketch::ToolMode::PlaceAnnotation);
+            if (shortcutMgr.justPressed("tool.measure"))
+                toolboxPanel.setTool(opticsketch::ToolMode::Measure);
 
             // X = Toggle grid snap
             if (shortcutMgr.justPressed("snap.toggle_grid"))
@@ -336,7 +381,8 @@ int main() {
                 auto selElems = scene.getSelectedElements();
                 auto selBeams = scene.getSelectedBeams();
                 auto selAnns = scene.getSelectedAnnotations();
-                if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                auto selMeas = scene.getSelectedMeasurements();
+                if (!selElems.empty() || !selBeams.empty() || !selAnns.empty() || !selMeas.empty()) {
                     auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
                     for (auto* e : selElems)
                         compound->addCommand(std::make_unique<opticsketch::RemoveElementCmd>(*e));
@@ -344,10 +390,13 @@ int main() {
                         compound->addCommand(std::make_unique<opticsketch::RemoveBeamCmd>(*b));
                     for (auto* a : selAnns)
                         compound->addCommand(std::make_unique<opticsketch::RemoveAnnotationCmd>(*a));
+                    for (auto* m : selMeas)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveMeasurementCmd>(*m));
                     undoStack.push(std::move(compound));
                     for (auto* e : selElems) scene.removeElement(e->id);
                     for (auto* b : selBeams) scene.removeBeam(b->id);
                     for (auto* a : selAnns) scene.removeAnnotation(a->id);
+                    for (auto* m : selMeas) scene.removeMeasurement(m->id);
                 }
             }
 
@@ -382,6 +431,27 @@ int main() {
             }
             if (shortcutMgr.justPressed("edit.select_all")) {
                 scene.selectAll();
+            }
+            if (shortcutMgr.justPressed("edit.group") && scene.getSelectionCount() >= 2) {
+                opticsketch::Group g = scene.createGroupFromSelection();
+                undoStack.push(std::make_unique<opticsketch::CreateGroupCmd>(g));
+            }
+            if (shortcutMgr.justPressed("edit.ungroup")) {
+                opticsketch::Group* selGroup = nullptr;
+                for (auto* e : scene.getSelectedElements()) {
+                    selGroup = scene.findGroupContaining(e->id);
+                    if (selGroup) break;
+                }
+                if (!selGroup) {
+                    for (auto* b : scene.getSelectedBeams()) {
+                        selGroup = scene.findGroupContaining(b->id);
+                        if (selGroup) break;
+                    }
+                }
+                if (selGroup) {
+                    undoStack.push(std::make_unique<opticsketch::DissolveGroupCmd>(*selGroup));
+                    scene.dissolveGroup(selGroup->id);
+                }
             }
             if (shortcutMgr.justPressed("view.frame_all")) {
                 glm::vec3 sceneMin(FLT_MAX), sceneMax(-FLT_MAX);
@@ -500,6 +570,12 @@ int main() {
         static bool viewportWindowVisible = true;
         static bool showViewportLabels = true;
         static bool showGridScale = true;
+        static bool openSavePresetPopup = false;
+        static char presetNameBuf[128] = "";
+
+        // Optics auto-trace state (declared here so it's visible to both menu and render code)
+        static bool autoTrace = false;
+        static opticsketch::TraceConfig traceConfig;
 
         // Menu bar
         if (ImGui::BeginMainMenuBar()) {
@@ -559,6 +635,58 @@ int main() {
                                 tinyfd_messageBox("Export PNG", "Image saved successfully.", "ok", "info", 1);
                             else
                                 tinyfd_messageBox("Export failed", "Could not save PNG file.", "ok", "error", 1);
+                        }
+                    }
+                }
+                if (ImGui::MenuItem("Export JPEG...")) {
+                    const char* filters[] = { "*.jpg", "*.jpeg" };
+                    const char* path = tinyfd_saveFileDialog("Export JPEG", "viewport.jpg", 2, filters, "JPEG image (*.jpg)");
+                    if (path) {
+                        std::string p = ensureJpgExtension(trimPath(path));
+                        if (!p.empty()) {
+                            if (viewport.exportToJpg(p, &scene))
+                                tinyfd_messageBox("Export JPEG", "Image saved successfully.", "ok", "info", 1);
+                            else
+                                tinyfd_messageBox("Export failed", "Could not save JPEG file.", "ok", "error", 1);
+                        }
+                    }
+                }
+                if (ImGui::MenuItem("Export PDF...")) {
+                    const char* filters[] = { "*.pdf" };
+                    const char* path = tinyfd_saveFileDialog("Export PDF", "viewport.pdf", 1, filters, "PDF document (*.pdf)");
+                    if (path) {
+                        std::string p = ensurePdfExtension(trimPath(path));
+                        if (!p.empty()) {
+                            if (viewport.exportToPdf(p, &scene))
+                                tinyfd_messageBox("Export PDF", "PDF saved successfully.", "ok", "info", 1);
+                            else
+                                tinyfd_messageBox("Export failed", "Could not save PDF file.", "ok", "error", 1);
+                        }
+                    }
+                }
+                if (ImGui::MenuItem("Export TikZ/LaTeX...")) {
+                    const char* filters[] = { "*.tex" };
+                    const char* path = tinyfd_saveFileDialog("Export TikZ/LaTeX", "diagram.tex", 1, filters, "LaTeX file (*.tex)");
+                    if (path) {
+                        std::string p = ensureTexExtension(trimPath(path));
+                        if (!p.empty()) {
+                            if (opticsketch::exportTikz(p, &scene, &sceneStyle))
+                                tinyfd_messageBox("Export TikZ", "LaTeX file saved successfully.", "ok", "info", 1);
+                            else
+                                tinyfd_messageBox("Export failed", "Could not save LaTeX file.", "ok", "error", 1);
+                        }
+                    }
+                }
+                if (ImGui::MenuItem("Export SVG...")) {
+                    const char* filters[] = { "*.svg" };
+                    const char* path = tinyfd_saveFileDialog("Export SVG", "diagram.svg", 1, filters, "SVG file (*.svg)");
+                    if (path) {
+                        std::string p = ensureSvgExtension(trimPath(path));
+                        if (!p.empty()) {
+                            if (opticsketch::exportSvg(p, &scene, &sceneStyle))
+                                tinyfd_messageBox("Export SVG", "SVG file saved successfully.", "ok", "info", 1);
+                            else
+                                tinyfd_messageBox("Export failed", "Could not save SVG file.", "ok", "error", 1);
                         }
                     }
                 }
@@ -695,6 +823,32 @@ int main() {
                 if (ImGui::MenuItem("Select All", shortcutMgr.getDisplayString("edit.select_all").c_str())) {
                     scene.selectAll();
                 }
+                ImGui::Separator();
+                {
+                    size_t selCount = scene.getSelectionCount();
+                    if (ImGui::MenuItem("Group", shortcutMgr.getDisplayString("edit.group").c_str(), false, selCount >= 2)) {
+                        opticsketch::Group g = scene.createGroupFromSelection();
+                        undoStack.push(std::make_unique<opticsketch::CreateGroupCmd>(g));
+                    }
+                    // Check if any selected object is in a group
+                    opticsketch::Group* selGroup = nullptr;
+                    for (const auto& e : scene.getSelectedElements()) {
+                        selGroup = scene.findGroupContaining(e->id);
+                        if (selGroup) break;
+                    }
+                    if (!selGroup) {
+                        for (const auto& b : scene.getSelectedBeams()) {
+                            selGroup = scene.findGroupContaining(b->id);
+                            if (selGroup) break;
+                        }
+                    }
+                    if (ImGui::MenuItem("Ungroup", shortcutMgr.getDisplayString("edit.ungroup").c_str(), false, selGroup != nullptr)) {
+                        if (selGroup) {
+                            undoStack.push(std::make_unique<opticsketch::DissolveGroupCmd>(*selGroup));
+                            scene.dissolveGroup(selGroup->id);
+                        }
+                    }
+                }
                 ImGui::EndMenu();
             }
             
@@ -716,9 +870,54 @@ int main() {
                 ImGui::Separator();
                 ImGui::MenuItem("Show Labels", nullptr, &showViewportLabels);
                 ImGui::MenuItem("Show Grid Scale", nullptr, &showGridScale);
+                ImGui::Separator();
+                if (ImGui::BeginMenu("View Presets")) {
+                    const auto& presets = scene.getViewPresets();
+                    for (size_t i = 0; i < presets.size(); i++) {
+                        ImGui::PushID(static_cast<int>(i));
+                        if (ImGui::MenuItem(presets[i].name.c_str())) {
+                            viewport.getCamera().applyPreset(presets[i]);
+                        }
+                        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                            scene.removeViewPreset(i);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::PopID();
+                    }
+                    if (!presets.empty()) ImGui::Separator();
+                    if (ImGui::MenuItem("Save Current View...")) {
+                        openSavePresetPopup = true;
+                    }
+                    if (presets.empty()) {
+                        ImGui::TextDisabled("No saved presets");
+                        ImGui::TextDisabled("Right-click to delete");
+                    }
+                    ImGui::EndMenu();
+                }
                 ImGui::EndMenu();
             }
             
+            // Optics menu
+            if (ImGui::BeginMenu("Optics")) {
+                if (ImGui::MenuItem("Trace Rays")) {
+                    opticsketch::RayTracer tracer;
+                    tracer.traceScene(&scene, traceConfig);
+                }
+                if (ImGui::MenuItem("Clear Traced Rays")) {
+                    scene.clearTracedBeams();
+                }
+                ImGui::Separator();
+                ImGui::Checkbox("Auto-Trace", &autoTrace);
+                ImGui::Separator();
+                ImGui::Text("Trace Config");
+                ImGui::DragInt("Max Bounces", &traceConfig.maxBounces, 1, 1, 100);
+                ImGui::DragFloat("Max Distance (mm)", &traceConfig.maxDistance, 10.0f, 100.0f, 50000.0f, "%.0f");
+                ImGui::DragFloat("Min Intensity", &traceConfig.minIntensity, 0.001f, 0.001f, 1.0f, "%.3f");
+
+                ImGui::EndMenu();
+            }
+
             // Windows menu
             if (ImGui::BeginMenu("Windows")) {
                 if (ImGui::MenuItem("Viewport", nullptr, viewportWindowVisible)) {
@@ -759,6 +958,33 @@ int main() {
             ImGui::EndMainMenuBar();
         }
         
+        // Save View Preset popup
+        if (openSavePresetPopup) {
+            ImGui::OpenPopup("Save View Preset");
+            memset(presetNameBuf, 0, sizeof(presetNameBuf));
+            openSavePresetPopup = false;
+        }
+        if (ImGui::BeginPopupModal("Save View Preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Enter a name for this view preset:");
+            ImGui::SetNextItemWidth(250);
+            bool enterPressed = ImGui::InputText("##PresetName", presetNameBuf, sizeof(presetNameBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(-1);
+            ImGui::Spacing();
+            bool canSave = strlen(presetNameBuf) > 0;
+            if (!canSave) ImGui::BeginDisabled();
+            if (ImGui::Button("Save", ImVec2(120, 0)) || (enterPressed && canSave)) {
+                auto preset = viewport.getCamera().captureState(std::string(presetNameBuf));
+                scene.addViewPreset(preset);
+                ImGui::CloseCurrentPopup();
+            }
+            if (!canSave) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
         // About dialog
         if (showAboutDialog) {
             ImGui::OpenPopup("About OpticSketch");
@@ -848,6 +1074,24 @@ int main() {
 
         // Style editor
         styleEditorPanel.render(&sceneStyle);
+
+        // Regenerate thumbnails if style colors changed
+        {
+            static glm::vec3 prevColors[14] = {};
+            bool colorsChanged = false;
+            for (int ci = 0; ci < 14; ci++) {
+                if (prevColors[ci] != sceneStyle.elementColors[ci]) {
+                    colorsChanged = true;
+                    prevColors[ci] = sceneStyle.elementColors[ci];
+                }
+            }
+            if (colorsChanged) {
+                viewport.generateThumbnails();
+                for (int ci = 0; ci < (int)opticsketch::ElementType::ImportedMesh; ci++) {
+                    libraryPanel.setThumbnailTexture(ci, viewport.getThumbnailTexture(ci));
+                }
+            }
+        }
 
         // Keyboard shortcuts panel
         shortcutsPanel.render(&shortcutMgr);
@@ -1112,7 +1356,62 @@ int main() {
                 }
             }
 
-            if (!ctrlPressed && clickStartedInViewport && !app.input.isDraggingCamera && currentTool != opticsketch::ToolMode::DrawBeam && currentTool != opticsketch::ToolMode::PlaceAnnotation) {
+            // Measurement tool: two-click placement (same pattern as DrawBeam)
+            static bool measureStartPlaced = false;
+            static glm::vec3 measureStartPoint;
+            static glm::vec3 measurePreviewEnd;
+
+            // Update preview end when hovering in Measure mode
+            if (currentTool == opticsketch::ToolMode::Measure && inViewport && measureStartPlaced) {
+                opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                float t = -ray.origin.y / ray.direction.y;
+                if (t > 0.0f && std::abs(ray.direction.y) > 1e-5f) {
+                    measurePreviewEnd = ray.origin + t * ray.direction;
+                }
+            }
+
+            if (currentTool == opticsketch::ToolMode::Measure && clickStartedInViewport && !ctrlPressed && !app.input.isDraggingCamera) {
+                opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                float t = -ray.origin.y / ray.direction.y;
+                if (t > 0.0f && std::abs(ray.direction.y) > 1e-5f) {
+                    glm::vec3 hitPoint = ray.origin + t * ray.direction;
+                    hitPoint.y = 0.0f;
+
+                    // Snap to nearest element center if close
+                    for (const auto& elem : scene.getElements()) {
+                        glm::vec3 ec = elem->getWorldBoundsCenter();
+                        if (glm::length(glm::vec2(hitPoint.x - ec.x, hitPoint.z - ec.z)) < 2.0f) {
+                            hitPoint = ec;
+                            break;
+                        }
+                    }
+
+                    if (!measureStartPlaced) {
+                        measureStartPoint = hitPoint;
+                        measurePreviewEnd = hitPoint;
+                        measureStartPlaced = true;
+                    } else {
+                        auto meas = std::make_unique<opticsketch::Measurement>();
+                        meas->startPoint = measureStartPoint;
+                        meas->endPoint = hitPoint;
+                        std::string measId = meas->id;
+                        scene.addMeasurement(std::move(meas));
+                        auto* added = scene.getMeasurements().back().get();
+                        undoStack.push(std::make_unique<opticsketch::AddMeasurementCmd>(*added));
+                        scene.selectMeasurement(measId);
+                        measureStartPlaced = false;
+                    }
+                }
+            }
+
+            // Reset measurement drawing if tool changes
+            if (currentTool != opticsketch::ToolMode::Measure) {
+                measureStartPlaced = false;
+            }
+
+            if (!ctrlPressed && clickStartedInViewport && !app.input.isDraggingCamera && currentTool != opticsketch::ToolMode::DrawBeam && currentTool != opticsketch::ToolMode::PlaceAnnotation && currentTool != opticsketch::ToolMode::Measure) {
                 int hoveredHandle = -1;
                 if (hasSelectedElements && currentTool != opticsketch::ToolMode::Select) {
                     opticsketch::GizmoType gType = (currentTool == opticsketch::ToolMode::Move) ? opticsketch::GizmoType::Move :
@@ -1501,12 +1800,20 @@ int main() {
                 }
             }
 
+            // Auto-trace rays every frame when enabled (interactive feedback)
+            if (autoTrace) {
+                opticsketch::RayTracer tracer;
+                tracer.traceScene(&scene, traceConfig);
+            }
+
             // Render to framebuffer
             viewport.beginFrame();
             viewport.renderGrid(25.0f, 100);
             viewport.renderScene(&scene);
             viewport.renderBeams(&scene);
-            
+            viewport.renderGaussianBeams(&scene);
+            viewport.renderFocalPoints(&scene);
+
             // Render preview beam if drawing (using the previewBeam declared earlier)
             if (currentTool == opticsketch::ToolMode::DrawBeam && beamStartPlaced && previewBeamPtr) {
                 viewport.renderBeam(*previewBeamPtr);
@@ -1537,7 +1844,10 @@ int main() {
             }
             
             viewport.endFrame();
-            
+
+            // Bloom post-process for Presentation mode
+            viewport.renderBloomPass();
+
             // Set up drag-drop target on the image (must be after Image call)
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("LIBRARY_ITEM")) {
@@ -1652,6 +1962,74 @@ int main() {
 
                     // Store screen rect for click-selection (use annotation's id hash as identifier)
                     // We handle click detection below
+                }
+            }
+
+            // --- Measurement overlays ---
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+
+                auto projectPoint = [&](const glm::vec3& worldPos, float& outSx, float& outSy) -> bool {
+                    glm::vec4 clip = vpMat * glm::vec4(worldPos, 1.0f);
+                    if (clip.w <= 0.0f) return false;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    outSx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    outSy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    return outSx >= imageMin.x && outSx <= imageMin.x + viewportSize.x &&
+                           outSy >= imageMin.y && outSy <= imageMin.y + viewportSize.y;
+                };
+
+                auto drawDimensionLine = [&](float sx1, float sy1, float sx2, float sy2, float dist, bool isSel, const glm::vec3& col) {
+                    ImU32 lineCol = IM_COL32((int)(col.r * 255), (int)(col.g * 255), (int)(col.b * 255), 220);
+                    ImU32 selCol = IM_COL32(255, 255, 100, 255);
+                    float th = isSel ? 2.0f : 1.5f;
+
+                    // Main line
+                    dl->AddLine(ImVec2(sx1, sy1), ImVec2(sx2, sy2), lineCol, th);
+
+                    // Perpendicular serifs at endpoints
+                    float dx = sx2 - sx1, dy = sy2 - sy1;
+                    float len = std::sqrt(dx * dx + dy * dy);
+                    if (len > 1e-3f) {
+                        float px = -dy / len * 6.0f, py = dx / len * 6.0f;
+                        dl->AddLine(ImVec2(sx1 - px, sy1 - py), ImVec2(sx1 + px, sy1 + py), lineCol, th);
+                        dl->AddLine(ImVec2(sx2 - px, sy2 - py), ImVec2(sx2 + px, sy2 + py), lineCol, th);
+                    }
+
+                    // Selection highlight
+                    if (isSel) {
+                        dl->AddLine(ImVec2(sx1, sy1), ImVec2(sx2, sy2), selCol, th + 1.0f);
+                    }
+
+                    // Distance text at midpoint
+                    float mx = (sx1 + sx2) * 0.5f, my = (sy1 + sy2) * 0.5f;
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%.1f mm", dist);
+                    ImVec2 textSz = ImGui::CalcTextSize(buf);
+                    float tx = mx - textSz.x * 0.5f, ty = my - textSz.y - 4.0f;
+                    dl->AddRectFilled(ImVec2(tx - 3, ty - 2), ImVec2(tx + textSz.x + 3, ty + textSz.y + 2),
+                                      IM_COL32(30, 30, 35, 200), 3.0f);
+                    dl->AddText(ImVec2(tx, ty), lineCol, buf);
+                };
+
+                // Render persistent measurements
+                for (const auto& meas : scene.getMeasurements()) {
+                    if (!meas->visible) continue;
+                    float sx1, sy1, sx2, sy2;
+                    if (!projectPoint(meas->startPoint, sx1, sy1)) continue;
+                    if (!projectPoint(meas->endPoint, sx2, sy2)) continue;
+                    drawDimensionLine(sx1, sy1, sx2, sy2, meas->getDistance(),
+                                      scene.isSelected(meas->id), meas->color);
+                }
+
+                // Render measurement preview (while placing)
+                if (currentTool == opticsketch::ToolMode::Measure && measureStartPlaced) {
+                    float sx1, sy1, sx2, sy2;
+                    if (projectPoint(measureStartPoint, sx1, sy1) && projectPoint(measurePreviewEnd, sx2, sy2)) {
+                        float dist = glm::length(measurePreviewEnd - measureStartPoint);
+                        drawDimensionLine(sx1, sy1, sx2, sy2, dist, false, glm::vec3(0.9f, 0.9f, 0.3f));
+                    }
                 }
             }
 

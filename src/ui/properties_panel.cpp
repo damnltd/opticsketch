@@ -2,10 +2,12 @@
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/annotation.h"
+#include "elements/measurement.h"
 #include "render/beam.h"
 #include <glm/gtc/quaternion.hpp>
 #include <glm/trigonometric.hpp>
 #include <cstring>
+#include <cmath>
 
 namespace opticsketch {
 
@@ -140,6 +142,50 @@ void PropertiesPanel::render(Scene* scene) {
         ImGui::Checkbox("Show Label", &elem->showLabel);
         ImGui::Checkbox("Locked", &elem->locked);
         ImGui::DragInt("Layer", &elem->layer, 1, 0, 255);
+        ImGui::Spacing();
+
+        // --- Optical Properties ---
+        if (ImGui::CollapsingHeader("Optical Properties")) {
+            static const char* opticalTypeNames[] = {
+                "Source", "Mirror", "Lens", "Splitter", "Absorber", "Prism", "Grating", "Passive"
+            };
+            int otIdx = static_cast<int>(elem->optics.opticalType);
+            if (ImGui::Combo("Optical Type", &otIdx, opticalTypeNames, 8)) {
+                elem->optics.opticalType = static_cast<OpticalType>(otIdx);
+            }
+
+            ImGui::DragFloat("IOR##optics", &elem->optics.ior, 0.01f, 1.0f, 3.0f, "%.4f");
+            ImGui::SliderFloat("Reflectivity##optics", &elem->optics.reflectivity, 0.0f, 1.0f, "%.3f");
+            ImGui::SliderFloat("Transmissivity##optics", &elem->optics.transmissivity, 0.0f, 1.0f, "%.3f");
+
+            if (elem->optics.opticalType == OpticalType::Lens) {
+                ImGui::DragFloat("Focal Length (mm)##optics", &elem->optics.focalLength, 0.5f, 1.0f, 10000.0f, "%.1f");
+                ImGui::DragFloat("Curvature R1 (mm)##optics", &elem->optics.curvatureR1, 1.0f, -10000.0f, 10000.0f, "%.1f");
+                ImGui::DragFloat("Curvature R2 (mm)##optics", &elem->optics.curvatureR2, 1.0f, -10000.0f, 10000.0f, "%.1f");
+                ImGui::Spacing();
+                // Lensmaker's equation: 1/f = (n-1) * (1/R1 - 1/R2)
+                float n = elem->optics.ior;
+                float r1 = elem->optics.curvatureR1;
+                float r2 = elem->optics.curvatureR2;
+                if (std::abs(r1) > 0.01f && std::abs(r2) > 0.01f) {
+                    float invF = (n - 1.0f) * (1.0f / r1 - 1.0f / r2);
+                    if (std::abs(invF) > 1e-8f) {
+                        float fComputed = 1.0f / invF;
+                        ImGui::Text("Computed f: %.2f mm", fComputed);
+                    } else {
+                        ImGui::Text("Computed f: infinity");
+                    }
+                }
+            }
+        }
+
+        // --- Material Properties ---
+        if (ImGui::CollapsingHeader("Material")) {
+            ImGui::SliderFloat("Metallic##mat", &elem->material.metallic, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Roughness##mat", &elem->material.roughness, 0.0f, 1.0f, "%.2f");
+            ImGui::SliderFloat("Transparency##mat", &elem->material.transparency, 0.0f, 1.0f, "%.2f");
+            ImGui::DragFloat("Fresnel IOR##mat", &elem->material.fresnelIOR, 0.01f, 1.0f, 3.0f, "%.3f");
+        }
     } else if (beam) {
         // Single beam properties
         static std::string s_lastBeamId;
@@ -174,6 +220,39 @@ void PropertiesPanel::render(Scene* scene) {
         ImGui::Separator();
         ImGui::Checkbox("Visible##beam", &beam->visible);
         ImGui::DragInt("Layer##beam", &beam->layer, 1, 0, 255);
+        ImGui::Spacing();
+
+        // --- Gaussian Beam section ---
+        ImGui::Text("Gaussian Beam");
+        ImGui::Separator();
+        ImGui::Checkbox("Enable Gaussian##beam", &beam->isGaussian);
+
+        if (beam->isGaussian) {
+            // Waist w0 displayed in mm (stored in meters)
+            float waistMM = beam->waistW0 * 1000.0f;
+            if (ImGui::DragFloat("Waist w0 (mm)##beam", &waistMM, 0.01f, 0.001f, 100.0f, "%.3f"))
+                beam->waistW0 = waistMM / 1000.0f;
+
+            // Wavelength displayed in nm (stored in meters)
+            float wavelengthNM = beam->wavelength * 1e9f;
+            if (ImGui::DragFloat("Wavelength (nm)##beam", &wavelengthNM, 1.0f, 100.0f, 2000.0f, "%.0f"))
+                beam->wavelength = wavelengthNM * 1e-9f;
+
+            ImGui::SliderFloat("Waist Position##beam", &beam->waistPosition, 0.0f, 1.0f, "%.2f");
+
+            ImGui::Spacing();
+            ImGui::Text("Computed Values");
+            ImGui::Separator();
+
+            float zR = beam->getRayleighRange();
+            float divergence = beam->getDivergenceAngle();
+            float beamLength = beam->getLength();
+            float endRadius = beam->beamRadiusAt(beamLength * (1.0f - beam->waistPosition));
+
+            ImGui::Text("Rayleigh range: %.3f mm", zR * 1000.0f);
+            ImGui::Text("Divergence: %.3f mrad", divergence * 1000.0f);
+            ImGui::Text("Radius at end: %.3f mm", endRadius * 1000.0f);
+        }
     } else {
         // Check for selected annotation
         opticsketch::Annotation* ann = scene->getSelectedAnnotation();
@@ -219,8 +298,48 @@ void PropertiesPanel::render(Scene* scene) {
             ImGui::Checkbox("Visible##ann", &ann->visible);
             ImGui::DragInt("Layer##ann", &ann->layer, 1, 0, 255);
         } else {
-            ImGui::TextDisabled("No selection");
-            ImGui::TextDisabled("Select an object in the viewport or outliner.");
+            // Check for selected measurement
+            opticsketch::Measurement* meas = scene->getSelectedMeasurement();
+            if (meas) {
+                static std::string s_lastMeasId;
+                static char measLabelBuf[256];
+                if (meas->id != s_lastMeasId) {
+                    s_lastMeasId = meas->id;
+                    strncpy(measLabelBuf, meas->label.c_str(), sizeof(measLabelBuf) - 1);
+                    measLabelBuf[sizeof(measLabelBuf) - 1] = '\0';
+                }
+
+                ImGui::Text("Measurement");
+                ImGui::Separator();
+                if (ImGui::InputText("Label##meas", measLabelBuf, sizeof(measLabelBuf)))
+                    meas->label = measLabelBuf;
+
+                ImGui::Text("ID: %s", meas->id.c_str());
+                ImGui::Spacing();
+
+                ImGui::Text("Points");
+                ImGui::Separator();
+                ImGui::DragFloat3("Start##meas", &meas->startPoint.x, 0.1f, -1e6f, 1e6f, "%.3f");
+                ImGui::DragFloat3("End##meas", &meas->endPoint.x, 0.1f, -1e6f, 1e6f, "%.3f");
+                ImGui::Spacing();
+
+                ImGui::Text("Distance: %.3f", meas->getDistance());
+                ImGui::Spacing();
+
+                ImGui::Text("Appearance");
+                ImGui::Separator();
+                ImGui::ColorEdit3("Color##meas", &meas->color.x);
+                ImGui::DragFloat("Font Size##meas", &meas->fontSize, 0.5f, 6.0f, 72.0f, "%.0f");
+                ImGui::Spacing();
+
+                ImGui::Text("State");
+                ImGui::Separator();
+                ImGui::Checkbox("Visible##meas", &meas->visible);
+                ImGui::DragInt("Layer##meas", &meas->layer, 1, 0, 255);
+            } else {
+                ImGui::TextDisabled("No selection");
+                ImGui::TextDisabled("Select an object in the viewport or outliner.");
+            }
         }
     }
 

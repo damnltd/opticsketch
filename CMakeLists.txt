@@ -186,11 +186,15 @@ add_executable(${PROJECT_NAME}
     src/render/viewport.cpp
     src/render/beam.cpp
     src/render/mesh_loader.cpp
+    src/render/stb_image_impl.cpp
     src/undo/undo.cpp
     src/export/export_png.cpp
+    src/export/export_tikz.cpp
+    src/export/export_svg.cpp
     src/elements/element.cpp
     src/elements/basic_elements.cpp
     src/elements/annotation.cpp
+    src/elements/measurement.cpp
     src/style/scene_style.cpp
     src/input/shortcut_manager.cpp
     src/ui/style_editor_panel.cpp
@@ -198,7 +202,9 @@ add_executable(${PROJECT_NAME}
     src/ui/template_panel.cpp
     src/templates/templates.cpp
     src/scene/scene.cpp
+    src/scene/group.cpp
     src/project/project.cpp
+    src/optics/ray_tracer.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

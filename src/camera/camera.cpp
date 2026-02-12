@@ -226,4 +226,31 @@ void Camera::updatePosition() {
     position = target + glm::vec3(x, y, z);
 }
 
+ViewPreset Camera::captureState(const std::string& name) const {
+    ViewPreset p;
+    p.name = name;
+    p.mode = mode;
+    p.position = position;
+    p.target = target;
+    p.up = up;
+    p.fov = fov;
+    p.orthoSize = orthoSize;
+    p.distance = distance;
+    p.azimuth = azimuth;
+    p.elevation = elevation;
+    return p;
+}
+
+void Camera::applyPreset(const ViewPreset& p) {
+    mode = p.mode;
+    position = p.position;
+    target = p.target;
+    up = p.up;
+    fov = p.fov;
+    orthoSize = p.orthoSize;
+    distance = p.distance;
+    azimuth = p.azimuth;
+    elevation = p.elevation;
+}
+
 } // namespace opticsketch

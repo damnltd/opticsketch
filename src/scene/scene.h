@@ -1,6 +1,8 @@
 #pragma once
 
 #include "elements/element.h"
+#include "camera/camera.h"
+#include "scene/group.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -11,6 +13,7 @@ namespace opticsketch {
 // Forward declarations
 class Beam;
 class Annotation;
+class Measurement;
 
 class Scene {
 public:
@@ -41,8 +44,20 @@ public:
     Annotation* getAnnotation(const std::string& id);
     const std::vector<std::unique_ptr<Annotation>>& getAnnotations() const { return annotations; }
 
+    // Measurement management
+    void addMeasurement(std::unique_ptr<Measurement> measurement);
+    bool removeMeasurement(const std::string& id);
+    Measurement* getMeasurement(const std::string& id);
+    const std::vector<std::unique_ptr<Measurement>>& getMeasurements() const { return measurements; }
+    std::vector<Measurement*> getSelectedMeasurements() const;
+    Measurement* getSelectedMeasurement() const;
+    void selectMeasurement(const std::string& id, bool additive = false);
+
     // Clear scene
     void clear();
+
+    // Remove all traced beams (beams where isTraced==true)
+    void clearTracedBeams();
 
     // Selection — supports multi-select via unordered_set of IDs
     // additive=false clears selection first; additive=true adds to existing selection
@@ -67,11 +82,29 @@ public:
     // Select all
     void selectAll();
 
+    // Group management
+    void addGroup(const Group& group);
+    bool removeGroup(const std::string& groupId);
+    Group* getGroup(const std::string& groupId);
+    const std::vector<Group>& getGroups() const { return groups; }
+    Group* findGroupContaining(const std::string& objectId);
+    Group createGroupFromSelection();
+    void dissolveGroup(const std::string& groupId);
+    void selectGroupMembers(const std::string& groupId, bool additive = false);
+
+    // View presets
+    void addViewPreset(const ViewPreset& preset);
+    void removeViewPreset(size_t index);
+    const std::vector<ViewPreset>& getViewPresets() const { return viewPresets; }
+
 private:
     std::vector<std::unique_ptr<Element>> elements;
     std::vector<std::unique_ptr<Beam>> beams;
     std::vector<std::unique_ptr<Annotation>> annotations;
+    std::vector<std::unique_ptr<Measurement>> measurements;
     std::unordered_set<std::string> selectedIds;
+    std::vector<Group> groups;
+    std::vector<ViewPreset> viewPresets;
 };
 
 } // namespace opticsketch

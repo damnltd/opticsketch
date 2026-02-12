@@ -1,6 +1,7 @@
 #include "undo/undo.h"
 #include "scene/scene.h"
 #include "elements/annotation.h"
+#include "elements/measurement.h"
 
 namespace opticsketch {
 
@@ -16,6 +17,8 @@ static std::unique_ptr<Element> snapshotElement(const Element& e) {
     s->layer = e.layer;
     s->boundsMin = e.boundsMin;
     s->boundsMax = e.boundsMax;
+    s->optics = e.optics;
+    s->material = e.material;
     s->meshVertices = e.meshVertices;
     s->meshSourcePath = e.meshSourcePath;
     return s;
@@ -30,6 +33,12 @@ static std::unique_ptr<Beam> snapshotBeam(const Beam& b) {
     s->width = b.width;
     s->visible = b.visible;
     s->layer = b.layer;
+    s->isTraced = b.isTraced;
+    s->sourceElementId = b.sourceElementId;
+    s->isGaussian = b.isGaussian;
+    s->waistW0 = b.waistW0;
+    s->wavelength = b.wavelength;
+    s->waistPosition = b.waistPosition;
     return s;
 }
 
@@ -231,6 +240,72 @@ void MultiTransformCmd::redo(Scene& scene) {
         Element* e = scene.getElement(id);
         if (e) e->transform = t;
     }
+}
+
+// --- Helper: snapshot measurement ---
+
+static std::unique_ptr<Measurement> snapshotMeasurement(const Measurement& m) {
+    auto s = std::make_unique<Measurement>(m.id);
+    s->label = m.label;
+    s->startPoint = m.startPoint;
+    s->endPoint = m.endPoint;
+    s->color = m.color;
+    s->fontSize = m.fontSize;
+    s->visible = m.visible;
+    s->layer = m.layer;
+    return s;
+}
+
+// --- AddMeasurementCmd ---
+
+AddMeasurementCmd::AddMeasurementCmd(const Measurement& meas)
+    : snapshot(snapshotMeasurement(meas)), measurementId(meas.id) {}
+
+void AddMeasurementCmd::undo(Scene& scene) {
+    scene.removeMeasurement(measurementId);
+}
+
+void AddMeasurementCmd::redo(Scene& scene) {
+    scene.addMeasurement(snapshotMeasurement(*snapshot));
+    scene.selectMeasurement(measurementId);
+}
+
+// --- RemoveMeasurementCmd ---
+
+RemoveMeasurementCmd::RemoveMeasurementCmd(const Measurement& meas)
+    : snapshot(snapshotMeasurement(meas)), measurementId(meas.id) {}
+
+void RemoveMeasurementCmd::undo(Scene& scene) {
+    scene.addMeasurement(snapshotMeasurement(*snapshot));
+    scene.selectMeasurement(measurementId);
+}
+
+void RemoveMeasurementCmd::redo(Scene& scene) {
+    scene.removeMeasurement(measurementId);
+}
+
+// --- CreateGroupCmd ---
+
+CreateGroupCmd::CreateGroupCmd(const Group& group) : snapshot(group) {}
+
+void CreateGroupCmd::undo(Scene& scene) {
+    scene.dissolveGroup(snapshot.id);
+}
+
+void CreateGroupCmd::redo(Scene& scene) {
+    scene.addGroup(snapshot);
+}
+
+// --- DissolveGroupCmd ---
+
+DissolveGroupCmd::DissolveGroupCmd(const Group& group) : snapshot(group) {}
+
+void DissolveGroupCmd::undo(Scene& scene) {
+    scene.addGroup(snapshot);
+}
+
+void DissolveGroupCmd::redo(Scene& scene) {
+    scene.dissolveGroup(snapshot.id);
 }
 
 } // namespace opticsketch

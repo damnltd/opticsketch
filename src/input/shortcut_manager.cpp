@@ -15,6 +15,7 @@ void ShortcutManager::registerDefaults() {
     bindings.push_back({"tool.scale",        "Scale Tool",       "Tools", GLFW_KEY_R});
     bindings.push_back({"tool.beam",         "Draw Beam",        "Tools", GLFW_KEY_B});
     bindings.push_back({"tool.annotation",   "Place Annotation", "Tools", GLFW_KEY_T});
+    bindings.push_back({"tool.measure",      "Measure Tool",     "Tools", GLFW_KEY_M});
 
     // Snap
     bindings.push_back({"snap.toggle_grid",  "Toggle Grid Snap", "Snap",  GLFW_KEY_X});
@@ -35,6 +36,8 @@ void ShortcutManager::registerDefaults() {
     bindings.push_back({"edit.delete",     "Delete",     "Edit", GLFW_KEY_DELETE});
     bindings.push_back({"edit.delete_alt", "Delete (alt)","Edit", GLFW_KEY_BACKSPACE});
     bindings.push_back({"edit.select_all", "Select All", "Edit", GLFW_KEY_A, true});
+    bindings.push_back({"edit.group",      "Group",      "Edit", GLFW_KEY_G, true});
+    bindings.push_back({"edit.ungroup",    "Ungroup",    "Edit", GLFW_KEY_G, true, true});
 
     // View
     bindings.push_back({"view.reset",          "Reset View",     "View", GLFW_KEY_HOME});

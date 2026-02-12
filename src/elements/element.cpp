@@ -66,6 +66,8 @@ std::unique_ptr<Element> Element::clone() const {
     e->layer = layer;
     e->boundsMin = boundsMin;
     e->boundsMax = boundsMax;
+    e->optics = optics;
+    e->material = material;
     e->meshVertices = meshVertices;
     e->meshSourcePath = meshSourcePath;
     return e;

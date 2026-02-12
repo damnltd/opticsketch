@@ -6,6 +6,8 @@
 #include <utility>
 #include "elements/element.h"
 #include "elements/annotation.h"
+#include "elements/measurement.h"
+#include "scene/group.h"
 #include "render/beam.h"
 
 namespace opticsketch {
@@ -146,6 +148,48 @@ public:
 private:
     std::vector<std::pair<std::string, Transform>> oldTransforms;
     std::vector<std::pair<std::string, Transform>> newTransforms;
+};
+
+// Add measurement (undo = remove, redo = re-add)
+class AddMeasurementCmd : public UndoCommand {
+public:
+    AddMeasurementCmd(const Measurement& meas);
+    void undo(Scene& scene) override;
+    void redo(Scene& scene) override;
+private:
+    std::unique_ptr<Measurement> snapshot;
+    std::string measurementId;
+};
+
+// Remove measurement (undo = re-add, redo = remove)
+class RemoveMeasurementCmd : public UndoCommand {
+public:
+    RemoveMeasurementCmd(const Measurement& meas);
+    void undo(Scene& scene) override;
+    void redo(Scene& scene) override;
+private:
+    std::unique_ptr<Measurement> snapshot;
+    std::string measurementId;
+};
+
+// Create group (undo = dissolve, redo = re-add)
+class CreateGroupCmd : public UndoCommand {
+public:
+    CreateGroupCmd(const Group& group);
+    void undo(Scene& scene) override;
+    void redo(Scene& scene) override;
+private:
+    Group snapshot;
+};
+
+// Dissolve group (undo = re-add, redo = dissolve)
+class DissolveGroupCmd : public UndoCommand {
+public:
+    DissolveGroupCmd(const Group& group);
+    void undo(Scene& scene) override;
+    void redo(Scene& scene) override;
+private:
+    Group snapshot;
 };
 
 } // namespace opticsketch

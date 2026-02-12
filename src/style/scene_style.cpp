@@ -3,6 +3,8 @@
 namespace opticsketch {
 
 void SceneStyle::resetToDefaults() {
+    renderMode = RenderMode::Standard;
+
     // Element colors matching original hardcoded values
     elementColors[0]  = glm::vec3(1.0f, 0.2f, 0.2f);  // Laser
     elementColors[1]  = glm::vec3(0.8f, 0.8f, 0.9f);  // Mirror
@@ -19,9 +21,16 @@ void SceneStyle::resetToDefaults() {
     elementColors[12] = glm::vec3(0.5f, 0.5f, 0.55f); // Mount
     elementColors[13] = glm::vec3(0.7f, 0.7f, 0.7f);  // ImportedMesh
 
+    bgMode = BackgroundMode::Solid;
     bgColor = glm::vec3(0.05f, 0.05f, 0.06f);
+    bgGradientTop = glm::vec3(0.12f, 0.12f, 0.15f);
+    bgGradientBottom = glm::vec3(0.02f, 0.02f, 0.03f);
     gridColor = glm::vec3(0.3f, 0.3f, 0.35f);
     gridAlpha = 0.5f;
+
+    hdriPath.clear();
+    hdriIntensity = 1.0f;
+    hdriRotation = 0.0f;
     wireframeColor = glm::vec3(0.2f, 1.0f, 0.2f);
     selectionBrightness = 1.3f;
     ambientStrength = 0.14f;
@@ -32,6 +41,11 @@ void SceneStyle::resetToDefaults() {
     gridSpacing = 25.0f;
     snapToElement = false;
     elementSnapRadius = 2.0f;
+
+    showFocalPoints = true;
+    bloomThreshold = 0.8f;
+    bloomIntensity = 1.0f;
+    bloomBlurPasses = 5;
 }
 
 } // namespace opticsketch

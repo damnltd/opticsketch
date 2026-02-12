@@ -10,7 +10,8 @@ enum class ToolMode {
     Rotate,
     Scale,
     DrawBeam,
-    PlaceAnnotation
+    PlaceAnnotation,
+    Measure
 };
 
 class ToolboxPanel {

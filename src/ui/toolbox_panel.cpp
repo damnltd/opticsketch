@@ -108,6 +108,26 @@ static void drawAnnotationIcon(ImDrawList* drawList, ImVec2 min, ImVec2 max) {
     drawList->AddLine(ImVec2(c.x - s * 0.4f, c.y + s), ImVec2(c.x + s * 0.4f, c.y + s), col, th);
 }
 
+static void drawMeasureIcon(ImDrawList* drawList, ImVec2 min, ImVec2 max) {
+    ImVec2 c = ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+    float s = (std::min(max.x - min.x, max.y - min.y) - ICON_PAD) * 0.35f;
+    ImU32 col = IM_COL32(230, 230, 80, 255);
+    float th = 1.8f;
+    // Horizontal line with perpendicular serifs at each end
+    ImVec2 left(c.x - s, c.y);
+    ImVec2 right(c.x + s, c.y);
+    drawList->AddLine(left, right, col, th);
+    // Left serif
+    drawList->AddLine(ImVec2(left.x, c.y - s * 0.5f), ImVec2(left.x, c.y + s * 0.5f), col, th);
+    // Right serif
+    drawList->AddLine(ImVec2(right.x, c.y - s * 0.5f), ImVec2(right.x, c.y + s * 0.5f), col, th);
+    // Arrowheads
+    drawList->AddLine(left, ImVec2(left.x + 4, c.y - 3), col, th);
+    drawList->AddLine(left, ImVec2(left.x + 4, c.y + 3), col, th);
+    drawList->AddLine(right, ImVec2(right.x - 4, c.y - 3), col, th);
+    drawList->AddLine(right, ImVec2(right.x - 4, c.y + 3), col, th);
+}
+
 ToolboxPanel::ToolboxPanel() {
 }
 
@@ -135,6 +155,7 @@ void ToolboxPanel::render() {
         case ToolMode::Scale: toolName = "Scale";  toolDesc = "Click and drag to scale (R)"; break;
         case ToolMode::DrawBeam: toolName = "Draw Beam"; toolDesc = "Click to place beam points (B)"; break;
         case ToolMode::PlaceAnnotation: toolName = "Annotation"; toolDesc = "Click to place text annotation (T)"; break;
+        case ToolMode::Measure: toolName = "Measure"; toolDesc = "Click two points to measure distance (M)"; break;
     }
     ImGui::Text("%s", toolName);
     ImGui::TextDisabled("%s", toolDesc);
@@ -174,6 +195,8 @@ void ToolboxPanel::renderToolButtons() {
     drawToolButton("##ToolDrawBeam", ToolMode::DrawBeam, drawBeamIcon);
     ImGui::SameLine();
     drawToolButton("##ToolAnnotation", ToolMode::PlaceAnnotation, drawAnnotationIcon);
+    ImGui::SameLine();
+    drawToolButton("##ToolMeasure", ToolMode::Measure, drawMeasureIcon);
 
     ImGui::PopStyleVar(2);
 }

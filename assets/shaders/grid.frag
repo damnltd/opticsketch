@@ -11,8 +11,15 @@ uniform vec3 uViewPos;
 uniform float uAmbientStrength = 0.14;
 uniform float uSpecularStrength = 0.55;
 uniform float uShininess = 48.0;
+uniform float uEmissive = 0.0;
 
 void main() {
+    // Emissive path: bypass lighting and tonemapping (for beams, focal points, etc.)
+    if (uEmissive > 0.5) {
+        FragColor = vec4(uColor, uAlpha);
+        return;
+    }
+
     vec3 norm = normalize(Normal);
     vec3 viewDir = normalize(uViewPos - FragPos);
 
