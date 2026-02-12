@@ -88,16 +88,12 @@ void Camera::pan(float deltaX, float deltaY) {
 
 void Camera::zoom(float delta) {
     if (mode == CameraMode::TopDown2D || mode == CameraMode::Orthographic3D) {
+        // In ortho modes, zoom changes the visible area (orthoSize), not camera distance
         orthoSize -= delta * zoomSpeed;
-        orthoSize = std::max(0.1f, std::min(orthoSize, 1000.0f));
-        // For Orthographic3D, also update distance to keep them in sync
-        if (mode == CameraMode::Orthographic3D) {
-            distance = orthoSize; // Keep distance and orthoSize synchronized
-            updatePosition();
-        }
+        orthoSize = std::clamp(orthoSize, 0.1f, 1000.0f);
     } else {
         distance -= delta * zoomSpeed * distance;
-        distance = std::max(0.1f, std::min(distance, 1000.0f));
+        distance = std::clamp(distance, 0.1f, 1000.0f);
         updatePosition();
     }
 }
@@ -135,26 +131,53 @@ void Camera::setPreset(const std::string& preset) {
 }
 
 void Camera::setMode(CameraMode newMode) {
-    // When switching between Perspective3D and Orthographic3D, preserve state
-    if ((mode == CameraMode::Perspective3D && newMode == CameraMode::Orthographic3D) ||
-        (mode == CameraMode::Orthographic3D && newMode == CameraMode::Perspective3D)) {
-        // Preserve azimuth, elevation, and target
-        // Convert zoom: distance <-> orthoSize
-        if (newMode == CameraMode::Orthographic3D) {
-            // Switching to orthographic: use current distance as orthoSize
-            orthoSize = distance;
-        } else {
-            // Switching to perspective: use current orthoSize as distance
-            distance = orthoSize;
+    if (newMode == mode) return;
+
+    float halfFovRad = glm::radians(fov * 0.5f);
+
+    // --- Switching TO TopDown2D ---
+    if (newMode == CameraMode::TopDown2D) {
+        // Preserve target XZ and current visible extent
+        if (mode == CameraMode::Perspective3D) {
+            orthoSize = distance * std::tan(halfFovRad);
         }
-        // Update position to reflect the new mode
-        updatePosition();
-    } else if (newMode == CameraMode::TopDown2D) {
-        // Switching to 2D: reset to top-down preset
-        setPreset("top");
+        // orthoSize already correct if coming from Ortho3D
+        position = glm::vec3(target.x, 10.0f, target.z);
+        up = glm::vec3(0.0f, 0.0f, -1.0f);
+        mode = newMode;
         return;
     }
-    
+
+    // --- Switching FROM TopDown2D to a 3D mode ---
+    if (mode == CameraMode::TopDown2D) {
+        // Restore sensible 3D orientation, preserve target and orthoSize
+        up = glm::vec3(0.0f, 1.0f, 0.0f);
+        azimuth = 0.0f;
+        elevation = 0.5f;
+        if (newMode == CameraMode::Perspective3D) {
+            distance = orthoSize / std::tan(halfFovRad);
+            distance = std::clamp(distance, 0.1f, 1000.0f);
+        } else {
+            // Ortho3D: keep current orthoSize, set distance to something reasonable
+            distance = orthoSize;
+        }
+        updatePosition();
+        mode = newMode;
+        return;
+    }
+
+    // --- Switching between Perspective3D and Orthographic3D ---
+    // Preserve azimuth, elevation, target (camera stays put)
+    if (newMode == CameraMode::Orthographic3D) {
+        // Perspective → Ortho: match visible vertical extent at target distance
+        orthoSize = distance * std::tan(halfFovRad);
+    } else {
+        // Ortho → Perspective: compute distance that matches current orthoSize
+        distance = orthoSize / std::tan(halfFovRad);
+        distance = std::clamp(distance, 0.1f, 1000.0f);
+        updatePosition();
+    }
+
     mode = newMode;
 }
 
@@ -180,7 +203,6 @@ void Camera::frameOn(const glm::vec3& center, float boundsRadius) {
         orthoSize = r * 1.2f;
     } else if (mode == CameraMode::Orthographic3D) {
         orthoSize = r * 1.2f;
-        distance = orthoSize;
         updatePosition();
     } else {
         // Perspective: distance so bounding sphere fits in the FOV

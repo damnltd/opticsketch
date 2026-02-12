@@ -157,7 +157,7 @@ void SetupFonts() {
     // Primary font: Inter or Roboto (clean, readable)
     // - Inter: https://rsms.me/inter/
     // - Or use system fonts
-    float fontSize = 15.0f;
+    float fontSize = 16.0f;
     
     // Configure font rendering for better quality
     ImFontConfig fontConfig;
@@ -177,8 +177,12 @@ void SetupFonts() {
     
     if (!mainFont) {
         // Try system fonts for better rendering
-        // Linux common fonts
         const char* systemFonts[] = {
+            // Windows
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "C:\\Windows\\Fonts\\calibri.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+            // Linux
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -211,11 +215,22 @@ void SetupFonts() {
     monoConfig.PixelSnapH = true;
     monoConfig.RasterizerMultiply = 1.2f;
     
-    const char* monoPath = "assets/fonts/JetBrainsMono-Regular.ttf";
-    if (FileExists(monoPath)) {
-        io.Fonts->AddFontFromFileTTF(monoPath, 14.0f, &monoConfig);
+    const char* monoFonts[] = {
+        "assets/fonts/JetBrainsMono-Regular.ttf",
+        // Windows
+        "C:\\Windows\\Fonts\\consola.ttf",
+        "C:\\Windows\\Fonts\\cascadiamono.ttf",
+        // Linux
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        nullptr
+    };
+    for (int i = 0; monoFonts[i] != nullptr; ++i) {
+        if (FileExists(monoFonts[i])) {
+            if (io.Fonts->AddFontFromFileTTF(monoFonts[i], 15.0f, &monoConfig))
+                break;
+        }
     }
-    // If mono font doesn't exist, we'll just use the default font
     
     // Build font atlas with better quality settings
     io.Fonts->Build();

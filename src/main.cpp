@@ -29,6 +29,8 @@
 #include "input/shortcut_manager.h"
 #include "ui/style_editor_panel.h"
 #include "ui/shortcuts_panel.h"
+#include "ui/template_panel.h"
+#include "templates/templates.h"
 
 // Ensure path ends with .optsk for save (so Open can find the file)
 static std::string ensureOptskExtension(const std::string& path) {
@@ -164,6 +166,7 @@ int main() {
     opticsketch::PropertiesPanel propertiesPanel;
     opticsketch::StyleEditorPanel styleEditorPanel;
     opticsketch::ShortcutsPanel shortcutsPanel;
+    opticsketch::TemplatePanel templatePanel;
 
     // Keyboard shortcuts manager
     opticsketch::ShortcutManager shortcutMgr;
@@ -739,6 +742,9 @@ int main() {
                 if (ImGui::MenuItem("Keyboard Shortcuts", nullptr, shortcutsPanel.isVisible())) {
                     shortcutsPanel.setVisible(!shortcutsPanel.isVisible());
                 }
+                if (ImGui::MenuItem("Templates", nullptr, templatePanel.isVisible())) {
+                    templatePanel.setVisible(!templatePanel.isVisible());
+                }
                 ImGui::EndMenu();
             }
             
@@ -845,6 +851,9 @@ int main() {
 
         // Keyboard shortcuts panel
         shortcutsPanel.render(&shortcutMgr);
+
+        // Templates panel
+        templatePanel.render(&scene, &undoStack, &projectPath, window);
 
         // Viewport window
         if (ImGui::Begin("3D Viewport", &viewportWindowVisible)) {

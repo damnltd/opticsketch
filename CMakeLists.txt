@@ -195,6 +195,8 @@ add_executable(${PROJECT_NAME}
     src/input/shortcut_manager.cpp
     src/ui/style_editor_panel.cpp
     src/ui/shortcuts_panel.cpp
+    src/ui/template_panel.cpp
+    src/templates/templates.cpp
     src/scene/scene.cpp
     src/project/project.cpp
 )
