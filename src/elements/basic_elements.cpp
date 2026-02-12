@@ -63,6 +63,7 @@ std::unique_ptr<Element> createLens(const std::string& id) {
     elem->optics.focalLength = 50.0f;
     elem->optics.curvatureR1 = 100.0f;
     elem->optics.curvatureR2 = -100.0f;
+    elem->optics.cauchyB = 4.2e-15f; // BK7 dispersion
     elem->material.transparency = 0.7f;
     elem->material.fresnelIOR = 1.5168f;
     return elem;
@@ -115,6 +116,7 @@ std::unique_ptr<Element> createPrism(const std::string& id) {
     elem->boundsMax = glm::vec3(0.5f, 0.433f, 0.5f);
     elem->optics.opticalType = OpticalType::Prism;
     elem->optics.ior = 1.5168f;
+    elem->optics.cauchyB = 4.2e-15f; // BK7 dispersion
     elem->material.transparency = 0.6f;
     elem->material.fresnelIOR = 1.5168f;
     return elem;
@@ -126,6 +128,7 @@ std::unique_ptr<Element> createPrismRA(const std::string& id) {
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.5f);
     elem->optics.opticalType = OpticalType::Prism;
     elem->optics.ior = 1.5168f;
+    elem->optics.cauchyB = 4.2e-15f; // BK7 dispersion
     elem->material.transparency = 0.6f;
     elem->material.fresnelIOR = 1.5168f;
     return elem;

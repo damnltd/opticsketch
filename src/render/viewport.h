@@ -62,11 +62,13 @@ public:
     void renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
 
     // Render gizmo at an arbitrary world-space center (for multi-select centroid, etc.)
-    void renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
-    
-    // Gizmo picking: returns 0=X, 1=Y, 2=Z, -1=none. viewportX/Y relative to viewport.
+    void renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1,
+                       const glm::mat3& orientation = glm::mat3(1.0f), float dragAngle = 0.0f, float dragStartAngle = 0.0f);
+
+    // Gizmo picking: returns handle ID or -1. viewportX/Y relative to viewport.
     int getGizmoHoveredHandle(Element* selectedElement, GizmoType gizmoType,
-                              float viewportX, float viewportY) const;
+                              float viewportX, float viewportY,
+                              const glm::mat3& orientation = glm::mat3(1.0f)) const;
     
     // Get texture ID for ImGui display
     GLuint getTextureId() const { return textureId; }

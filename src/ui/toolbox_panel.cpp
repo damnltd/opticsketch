@@ -159,7 +159,19 @@ void ToolboxPanel::render() {
     }
     ImGui::Text("%s", toolName);
     ImGui::TextDisabled("%s", toolDesc);
-    
+
+    // Gizmo space toggle (only relevant for Move/Rotate/Scale)
+    if (currentTool == ToolMode::Move || currentTool == ToolMode::Rotate || currentTool == ToolMode::Scale) {
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        const char* spaceLabel = (gizmoSpace == GizmoSpace::World) ? "World" : "Local";
+        if (ImGui::Button(spaceLabel, ImVec2(-1, 0))) {
+            toggleGizmoSpace();
+        }
+        ImGui::TextDisabled("Gizmo orientation");
+    }
+
     ImGui::End();
 }
 

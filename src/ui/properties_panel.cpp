@@ -190,6 +190,30 @@ void PropertiesPanel::render(Scene* scene) {
             if (elem->optics.opticalType == OpticalType::Grating) {
                 ImGui::DragFloat("Line Density (lines/mm)##optics", &elem->optics.gratingLineDensity, 10.0f, 100.0f, 2400.0f, "%.0f");
             }
+
+            // Dispersion for refractive elements
+            if (elem->optics.opticalType == OpticalType::Lens ||
+                elem->optics.opticalType == OpticalType::Prism) {
+                // Display in units of 1e-15 for readability
+                float cauchyBscaled = elem->optics.cauchyB * 1e15f;
+                if (ImGui::DragFloat("Cauchy B (x1e-15 m^2)##optics", &cauchyBscaled, 0.1f, 0.0f, 20.0f, "%.1f")) {
+                    elem->optics.cauchyB = cauchyBscaled * 1e-15f;
+                }
+                ImGui::TextDisabled("0 = no dispersion, 4.2 = BK7 glass");
+            }
+
+            // Source-specific properties
+            if (elem->optics.opticalType == OpticalType::Source) {
+                ImGui::Separator();
+                ImGui::Text("Source Settings");
+                ImGui::DragInt("Ray Count##source", &elem->optics.sourceRayCount, 2, 1, 21);
+                // Force odd for symmetric spread
+                if (elem->optics.sourceRayCount > 1 && elem->optics.sourceRayCount % 2 == 0)
+                    elem->optics.sourceRayCount++;
+                ImGui::DragFloat("Beam Width (mm)##source", &elem->optics.sourceBeamWidth, 0.1f, 0.0f, 50.0f, "%.1f");
+                ImGui::Checkbox("White Light##source", &elem->optics.sourceIsWhiteLight);
+                ImGui::TextDisabled("White light emits 7 wavelengths for dispersion");
+            }
         }
 
         // --- Material Properties ---
