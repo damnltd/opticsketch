@@ -19,6 +19,7 @@ void ShortcutManager::registerDefaults() {
 
     // Snap
     bindings.push_back({"snap.toggle_grid",  "Toggle Grid Snap", "Snap",  GLFW_KEY_X});
+    bindings.push_back({"snap.toggle_beam",  "Toggle Beam Snap", "Snap",  GLFW_KEY_C});
 
     // File
     bindings.push_back({"file.new",       "New Project",     "File", GLFW_KEY_N, true});
@@ -26,6 +27,7 @@ void ShortcutManager::registerDefaults() {
     bindings.push_back({"file.save",      "Save Project",    "File", GLFW_KEY_S, true});
     bindings.push_back({"file.save_as",   "Save As...",      "File", GLFW_KEY_S, true, true});
     bindings.push_back({"file.export_png","Export PNG",       "File", GLFW_KEY_E, true});
+    bindings.push_back({"file.export_anim","Export Animation", "File", GLFW_KEY_E, true, true});
 
     // Edit
     bindings.push_back({"edit.undo",       "Undo",       "Edit", GLFW_KEY_Z, true});

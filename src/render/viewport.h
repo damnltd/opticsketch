@@ -163,6 +163,10 @@ private:
     void destroyThumbnails();
 
 public:
+    // Render beam highlight (cyan thick line) and snap point cross for snap-to-beam feedback
+    void renderBeamHighlight(const glm::vec3& beamStart, const glm::vec3& beamEnd,
+                             const glm::vec3& snapPoint);
+
     // Render bloom post-process pass (call after endFrame in Presentation mode)
     void renderBloomPass();
 

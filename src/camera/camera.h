@@ -73,6 +73,9 @@ public:
     ViewPreset captureState(const std::string& name) const;
     void applyPreset(const ViewPreset& preset);
 
+    // Set spherical coordinates directly (for animation turntable)
+    void setSpherical(float azimuth, float elevation, float distance);
+
     // Getters for private state
     float getDistance() const { return distance; }
     float getAzimuth() const { return azimuth; }

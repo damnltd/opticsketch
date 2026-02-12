@@ -25,7 +25,8 @@ enum class ElementType {
     ImportedMesh
 };
 
-enum class OpticalType { Source, Mirror, Lens, Splitter, Absorber, Prism, Grating, Passive };
+enum class OpticalType { Source, Mirror, Lens, Splitter, Absorber, Prism, Grating, Passive,
+                         Filter, Aperture, FiberCoupler };
 
 struct OpticalProperties {
     OpticalType opticalType = OpticalType::Passive;
@@ -35,6 +36,9 @@ struct OpticalProperties {
     float focalLength = 50.0f;      // mm
     float curvatureR1 = 100.0f;     // mm (front surface)
     float curvatureR2 = -100.0f;    // mm (back surface)
+    float apertureDiameter = 0.5f;  // fraction of bounds height (0..1) for aperture opening
+    float gratingLineDensity = 600.0f; // lines/mm for diffraction grating
+    glm::vec3 filterColor{1.0f};    // color multiplier for filter transmission
 };
 
 struct MaterialProperties {

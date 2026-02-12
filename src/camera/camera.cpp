@@ -213,6 +213,13 @@ void Camera::frameOn(const glm::vec3& center, float boundsRadius) {
     }
 }
 
+void Camera::setSpherical(float az, float el, float dist) {
+    azimuth = az;
+    elevation = el;
+    distance = std::clamp(dist, 0.1f, 1000.0f);
+    updatePosition();
+}
+
 void Camera::updatePosition() {
     if (mode == CameraMode::TopDown2D) {
         return; // Position is set directly in 2D mode

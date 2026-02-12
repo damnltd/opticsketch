@@ -1,4 +1,5 @@
 #include "export/export_tikz.h"
+#include "export/optical_symbols.h"
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/annotation.h"
@@ -11,6 +12,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <cfloat>
 
 namespace opticsketch {
 
@@ -41,27 +43,6 @@ static std::string fmt(float v, int prec = 3) {
     return oss.str();
 }
 
-// Get TikZ shape name for element type
-static const char* tikzShape(ElementType type) {
-    switch (type) {
-        case ElementType::Laser:        return "rectangle";
-        case ElementType::Mirror:       return "rectangle";
-        case ElementType::Lens:         return "ellipse";
-        case ElementType::BeamSplitter: return "diamond";
-        case ElementType::Detector:     return "rectangle";
-        case ElementType::Filter:       return "rectangle";
-        case ElementType::Aperture:     return "rectangle";
-        case ElementType::Prism:        return "regular polygon, regular polygon sides=3";
-        case ElementType::PrismRA:      return "rectangle";
-        case ElementType::Grating:      return "rectangle";
-        case ElementType::FiberCoupler: return "circle";
-        case ElementType::Screen:       return "rectangle";
-        case ElementType::Mount:        return "rectangle";
-        case ElementType::ImportedMesh: return "rectangle";
-        default:                        return "rectangle";
-    }
-}
-
 // Escape special LaTeX characters in text
 static std::string escapeLatex(const std::string& text) {
     std::string result;
@@ -84,7 +65,8 @@ static std::string escapeLatex(const std::string& text) {
     return result;
 }
 
-bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
+bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style,
+                const TikzExportOptions& opts) {
     if (!scene) return false;
 
     std::ofstream out(path);
@@ -96,7 +78,7 @@ bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
     // Document preamble
     out << "\\documentclass[tikz,border=10pt]{standalone}\n";
     out << "\\usepackage{tikz}\n";
-    out << "\\usetikzlibrary{shapes.geometric,arrows.meta,calc}\n";
+    out << "\\usetikzlibrary{shapes.geometric,arrows.meta,calc,patterns}\n";
     out << "\n";
 
     // Define colors
@@ -113,6 +95,21 @@ bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
     out << "  every node/.style={font=\\footnotesize},\n";
     out << "  >=Stealth\n";
     out << "]\n\n";
+
+    // --- Optical Axis ---
+    if (opts.showOpticalAxis) {
+        OpticalAxis axis = detectOpticalAxis(scene->getElements());
+        if (axis.valid) {
+            float ax1 = axis.start.x * scale;
+            float ay1 = axis.start.y * scale;
+            float ax2 = axis.end.x * scale;
+            float ay2 = axis.end.y * scale;
+            out << "% Optical axis\n";
+            out << "\\draw[gray, thin, dashed] ("
+                << fmt(ax1, 3) << "," << fmt(ay1, 3) << ") -- ("
+                << fmt(ax2, 3) << "," << fmt(ay2, 3) << ");\n\n";
+        }
+    }
 
     // --- Elements ---
     out << "% Elements\n";
@@ -137,25 +134,16 @@ bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
         std::string colorName = (style && colorIdx < kElementTypeCount) ?
             "elemcolor" + std::to_string(colorIdx) : "black";
 
-        out << "\\node[" << tikzShape(elem->type)
-            << ", draw=" << colorName
-            << ", fill=" << colorName << "!20"
-            << ", minimum width=" << fmt(w, 2) << "cm"
-            << ", minimum height=" << fmt(h, 2) << "cm";
+        // Render using optical symbol
+        OpticalSymbol sym = getOpticalSymbol(elem->type);
+        out << renderSymbolTikz(sym, tx, ty, w, h, rotDeg, colorName);
 
-        if (std::abs(rotDeg) > 0.1f) {
-            out << ", rotate=" << fmt(-rotDeg, 1);
-        }
-
-        out << "] (" << escapeLatex(elem->id) << ") at ("
-            << fmt(tx, 3) << "," << fmt(ty, 3) << ")";
-
+        // Label below the element
         if (elem->showLabel) {
-            out << " {" << escapeLatex(elem->label) << "}";
-        } else {
-            out << " {}";
+            out << "\\node[below, " << colorName << "] at ("
+                << fmt(tx, 3) << "," << fmt(ty - h / 2.0f - 0.15f, 3) << ") {"
+                << escapeLatex(elem->label) << "};\n";
         }
-        out << ";\n";
     }
     out << "\n";
 
@@ -182,7 +170,6 @@ bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
                 glm::vec3 perp(-dir.z, 0.0f, dir.x);
 
                 const int nSamples = 32;
-                // Upper boundary
                 std::vector<std::pair<float, float>> upper, lower;
                 for (int i = 0; i <= nSamples; ++i) {
                     float t = static_cast<float>(i) / nSamples;
@@ -253,6 +240,34 @@ bool exportTikz(const std::string& path, Scene* scene, SceneStyle* style) {
             << fmt(ex, 3) << "," << fmt(ey, 3) << ");\n";
     }
     out << "\n";
+
+    // --- Scale Bar ---
+    if (opts.showScaleBar) {
+        // Compute scene extent from elements
+        float minProj = FLT_MAX, maxProj = -FLT_MAX;
+        for (const auto& elem : scene->getElements()) {
+            if (!elem->visible) continue;
+            float proj = elem->transform.position.x;
+            if (proj < minProj) minProj = proj;
+            if (proj > maxProj) maxProj = proj;
+        }
+        if (minProj < maxProj) {
+            float sceneExtent = maxProj - minProj;
+            ScaleBar bar = chooseScaleBar(sceneExtent);
+            // Position below the scene
+            float barX = maxProj * scale - bar.lengthMm * scale;
+            float barY = -1.5f; // below origin
+            // Find lowest element Z for positioning
+            float minZ = 0;
+            for (const auto& elem : scene->getElements()) {
+                if (!elem->visible) continue;
+                float z = elem->transform.position.z * scale - 0.5f;
+                if (z < minZ) minZ = z;
+            }
+            barY = minZ - 0.8f;
+            out << renderScaleBarTikz(bar, scale, barX, barY);
+        }
+    }
 
     out << "\\end{tikzpicture}\n";
     out << "\\end{document}\n";
