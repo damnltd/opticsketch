@@ -171,6 +171,26 @@ void Camera::resetView() {
     updatePosition();
 }
 
+void Camera::frameOn(const glm::vec3& center, float boundsRadius) {
+    float r = std::max(boundsRadius, 0.1f);
+    target = center;
+
+    if (mode == CameraMode::TopDown2D) {
+        position = glm::vec3(center.x, 10.0f, center.z);
+        orthoSize = r * 1.2f;
+    } else if (mode == CameraMode::Orthographic3D) {
+        orthoSize = r * 1.2f;
+        distance = orthoSize;
+        updatePosition();
+    } else {
+        // Perspective: distance so bounding sphere fits in the FOV
+        float halfFovRad = glm::radians(fov * 0.5f);
+        distance = (r * 1.2f) / std::sin(halfFovRad);
+        distance = std::clamp(distance, 0.1f, 1000.0f);
+        updatePosition();
+    }
+}
+
 void Camera::updatePosition() {
     if (mode == CameraMode::TopDown2D) {
         return; // Position is set directly in 2D mode

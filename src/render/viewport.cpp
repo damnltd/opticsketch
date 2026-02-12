@@ -14,6 +14,10 @@
 
 namespace opticsketch {
 
+// Forward declarations for helper functions defined later in this file
+static CachedMesh createCachedMesh(const std::vector<float>& vertices, int floatsPerVertex = 6);
+static void deleteCachedMesh(CachedMesh& mesh);
+
 Viewport::Viewport() {
     camera.setAspectRatio(static_cast<float>(width) / height);
 }
@@ -33,7 +37,21 @@ void Viewport::cleanup() {
         gridVAO = 0;
         gridVBO = 0;
     }
+    // Delete prototype geometry caches
+    for (int i = 0; i < kMaxPrototypes; i++) {
+        deleteCachedMesh(prototypeGeometry[i]);
+        deleteCachedMesh(prototypeWireframe[i]);
+    }
+    prototypesInitialized = false;
+    // Delete per-instance mesh caches
+    for (auto& [id, mesh] : meshCache) {
+        deleteCachedMesh(mesh);
+    }
+    meshCache.clear();
+    // Delete beam buffer
+    deleteCachedMesh(beamBuffer);
     if (gizmo) {
+        gizmo->cleanup();
         delete gizmo;
         gizmo = nullptr;
     }
@@ -129,6 +147,7 @@ void main() {
     }
     
     initGrid();
+    initPrototypeGeometry();
 }
 
 void Viewport::resize(int w, int h) {
@@ -226,6 +245,36 @@ void Viewport::initGrid() {
     
     glBindVertexArray(0);
     gridInitialized = true;
+}
+
+static CachedMesh createCachedMesh(const std::vector<float>& vertices, int floatsPerVertex) {
+    CachedMesh mesh;
+    mesh.vertexCount = static_cast<GLsizei>(vertices.size() / floatsPerVertex);
+    if (mesh.vertexCount == 0) return mesh;
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    // Position attribute (location 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, floatsPerVertex * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Normal attribute (location 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, floatsPerVertex * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+    return mesh;
+}
+
+static void deleteCachedMesh(CachedMesh& mesh) {
+    if (mesh.vao != 0) {
+        glDeleteVertexArrays(1, &mesh.vao);
+        glDeleteBuffers(1, &mesh.vbo);
+        mesh.vao = 0;
+        mesh.vbo = 0;
+        mesh.vertexCount = 0;
+    }
 }
 
 void Viewport::renderGrid(float spacing, int gridSize) {
@@ -680,119 +729,354 @@ static std::vector<float> generatePlaneWireframeQuads(float size) {
     };
 }
 
+// --- Parametric box (generalizes cube) ---
+static std::vector<float> generateBoxSolid(float w, float h, float d) {
+    float hw = w * 0.5f, hh = h * 0.5f, hd = d * 0.5f;
+    std::vector<float> v;
+    auto quad = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n) {
+        // Two triangles: a-b-c, a-c-d
+        for (auto& p : {a, b, c, a, c, d}) {
+            v.push_back(p.x); v.push_back(p.y); v.push_back(p.z);
+            v.push_back(n.x); v.push_back(n.y); v.push_back(n.z);
+        }
+    };
+    // Front (+Z)
+    quad({-hw,-hh,hd},{hw,-hh,hd},{hw,hh,hd},{-hw,hh,hd},{0,0,1});
+    // Back (-Z)
+    quad({hw,-hh,-hd},{-hw,-hh,-hd},{-hw,hh,-hd},{hw,hh,-hd},{0,0,-1});
+    // Right (+X)
+    quad({hw,-hh,hd},{hw,-hh,-hd},{hw,hh,-hd},{hw,hh,hd},{1,0,0});
+    // Left (-X)
+    quad({-hw,-hh,-hd},{-hw,-hh,hd},{-hw,hh,hd},{-hw,hh,-hd},{-1,0,0});
+    // Top (+Y)
+    quad({-hw,hh,hd},{hw,hh,hd},{hw,hh,-hd},{-hw,hh,-hd},{0,1,0});
+    // Bottom (-Y)
+    quad({-hw,-hh,-hd},{hw,-hh,-hd},{hw,-hh,hd},{-hw,-hh,hd},{0,-1,0});
+    return v;
+}
+
+static std::vector<float> generateBoxWireframe(float w, float h, float d) {
+    float hw = w * 0.5f, hh = h * 0.5f, hd = d * 0.5f;
+    return {
+        -hw,-hh,-hd, hw,-hh,-hd,  hw,-hh,-hd, hw,hh,-hd,
+        hw,hh,-hd, -hw,hh,-hd,  -hw,hh,-hd, -hw,-hh,-hd,
+        -hw,-hh,hd, hw,-hh,hd,  hw,-hh,hd, hw,hh,hd,
+        hw,hh,hd, -hw,hh,hd,  -hw,hh,hd, -hw,-hh,hd,
+        -hw,-hh,-hd, -hw,-hh,hd,  hw,-hh,-hd, hw,-hh,hd,
+        hw,hh,-hd, hw,hh,hd,  -hw,hh,-hd, -hw,hh,hd
+    };
+}
+
+// --- Annular ring (for Aperture) ---
+static std::vector<float> generateAnnularRingSolid(float outerR, float innerR, float height, int segments) {
+    std::vector<float> v;
+    float halfH = height * 0.5f;
+    for (int i = 0; i < segments; i++) {
+        float a0 = 2.0f * 3.14159265f * i / segments;
+        float a1 = 2.0f * 3.14159265f * (i + 1) / segments;
+        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+
+        // Outer wall (normals pointing out)
+        glm::vec3 n0(c0, 0, s0), n1(c1, 0, s1);
+        glm::vec3 ot0(outerR*c0, -halfH, outerR*s0), ot1(outerR*c1, -halfH, outerR*s1);
+        glm::vec3 ob0(outerR*c0, halfH, outerR*s0), ob1(outerR*c1, halfH, outerR*s1);
+        // tri 1
+        for (auto& p : {ot0, ot1, ob1}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); glm::vec3 n = (p==ot0||p==ob0) ? n0 : n1; v.push_back(n.x); v.push_back(n.y); v.push_back(n.z); }
+        for (auto& p : {ot0, ob1, ob0}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); glm::vec3 n = (p==ot0||p==ob0) ? n0 : n1; v.push_back(n.x); v.push_back(n.y); v.push_back(n.z); }
+
+        // Inner wall (normals pointing in)
+        glm::vec3 ni0(-c0, 0, -s0), ni1(-c1, 0, -s1);
+        glm::vec3 it0(innerR*c0, -halfH, innerR*s0), it1(innerR*c1, -halfH, innerR*s1);
+        glm::vec3 ib0(innerR*c0, halfH, innerR*s0), ib1(innerR*c1, halfH, innerR*s1);
+        for (auto& p : {it1, it0, ib0}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); glm::vec3 n = (p==it0||p==ib0) ? ni0 : ni1; v.push_back(n.x); v.push_back(n.y); v.push_back(n.z); }
+        for (auto& p : {it1, ib0, ib1}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); glm::vec3 n = (p==it0||p==ib0) ? ni0 : ni1; v.push_back(n.x); v.push_back(n.y); v.push_back(n.z); }
+
+        // Top cap (Y = +halfH, normal up)
+        glm::vec3 nu(0, 1, 0);
+        for (auto& p : {ob0, ob1, ib1}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); v.push_back(nu.x); v.push_back(nu.y); v.push_back(nu.z); }
+        for (auto& p : {ob0, ib1, ib0}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); v.push_back(nu.x); v.push_back(nu.y); v.push_back(nu.z); }
+
+        // Bottom cap (Y = -halfH, normal down)
+        glm::vec3 nd(0, -1, 0);
+        for (auto& p : {ot1, ot0, it0}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); v.push_back(nd.x); v.push_back(nd.y); v.push_back(nd.z); }
+        for (auto& p : {ot1, it0, it1}) { v.push_back(p.x); v.push_back(p.y); v.push_back(p.z); v.push_back(nd.x); v.push_back(nd.y); v.push_back(nd.z); }
+    }
+    return v;
+}
+
+static std::vector<float> generateAnnularRingWireframe(float outerR, float innerR, float height, int segments) {
+    std::vector<float> v;
+    float halfH = height * 0.5f;
+    for (int i = 0; i < segments; i++) {
+        float a0 = 2.0f * 3.14159265f * i / segments;
+        float a1 = 2.0f * 3.14159265f * (i + 1) / segments;
+        float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+        // Outer top circle
+        v.push_back(outerR*c0); v.push_back(halfH); v.push_back(outerR*s0);
+        v.push_back(outerR*c1); v.push_back(halfH); v.push_back(outerR*s1);
+        // Outer bottom circle
+        v.push_back(outerR*c0); v.push_back(-halfH); v.push_back(outerR*s0);
+        v.push_back(outerR*c1); v.push_back(-halfH); v.push_back(outerR*s1);
+        // Inner top circle
+        v.push_back(innerR*c0); v.push_back(halfH); v.push_back(innerR*s0);
+        v.push_back(innerR*c1); v.push_back(halfH); v.push_back(innerR*s1);
+        // Inner bottom circle
+        v.push_back(innerR*c0); v.push_back(-halfH); v.push_back(innerR*s0);
+        v.push_back(innerR*c1); v.push_back(-halfH); v.push_back(innerR*s1);
+    }
+    // Vertical lines connecting outer to inner at a few positions
+    for (int i = 0; i < segments; i += segments / 4) {
+        float a = 2.0f * 3.14159265f * i / segments;
+        float c = cosf(a), s = sinf(a);
+        v.push_back(outerR*c); v.push_back(halfH); v.push_back(outerR*s);
+        v.push_back(outerR*c); v.push_back(-halfH); v.push_back(outerR*s);
+        v.push_back(innerR*c); v.push_back(halfH); v.push_back(innerR*s);
+        v.push_back(innerR*c); v.push_back(-halfH); v.push_back(innerR*s);
+    }
+    return v;
+}
+
+// --- Triangular prism (for Prism and PrismRA) ---
+static std::vector<float> generateTriangularPrismSolid(float sideLen, float depth, bool rightAngle) {
+    std::vector<float> v;
+    float hd = depth * 0.5f;
+
+    // Triangle vertices in XY plane
+    glm::vec3 p0, p1, p2;
+    if (rightAngle) {
+        // Right-angle: 45-45-90, right angle at origin
+        float leg = sideLen;
+        p0 = {-leg*0.5f, -leg*0.5f, 0};
+        p1 = { leg*0.5f, -leg*0.5f, 0};
+        p2 = {-leg*0.5f,  leg*0.5f, 0};
+    } else {
+        // Equilateral triangle centered
+        float h = sideLen * 0.866f; // sqrt(3)/2
+        float cy = h / 3.0f; // centroid y offset from base
+        p0 = {0, h - cy, 0};
+        p1 = {-sideLen*0.5f, -cy, 0};
+        p2 = { sideLen*0.5f, -cy, 0};
+    }
+
+    auto addTri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 n) {
+        for (auto& p : {a, b, c}) {
+            v.push_back(p.x); v.push_back(p.y); v.push_back(p.z);
+            v.push_back(n.x); v.push_back(n.y); v.push_back(n.z);
+        }
+    };
+    auto addQuad = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n) {
+        addTri(a, b, c, n);
+        addTri(a, c, d, n);
+    };
+
+    // Front cap (+Z)
+    glm::vec3 f0 = p0 + glm::vec3(0,0,hd), f1 = p1 + glm::vec3(0,0,hd), f2 = p2 + glm::vec3(0,0,hd);
+    addTri(f0, f1, f2, {0, 0, 1});
+
+    // Back cap (-Z)
+    glm::vec3 b0 = p0 + glm::vec3(0,0,-hd), b1 = p1 + glm::vec3(0,0,-hd), b2 = p2 + glm::vec3(0,0,-hd);
+    addTri(b0, b2, b1, {0, 0, -1});
+
+    // Side faces (3 edges of the triangle, each extruded)
+    glm::vec3 triPts[3] = {p0, p1, p2};
+    for (int i = 0; i < 3; i++) {
+        glm::vec3 a = triPts[i], b = triPts[(i+1)%3];
+        glm::vec3 af = a + glm::vec3(0,0,hd), bf = b + glm::vec3(0,0,hd);
+        glm::vec3 ab = a + glm::vec3(0,0,-hd), bb = b + glm::vec3(0,0,-hd);
+        // Normal = cross(edge along triangle, Z axis)
+        glm::vec3 edge = b - a;
+        glm::vec3 n = glm::normalize(glm::cross(edge, glm::vec3(0,0,1)));
+        addQuad(af, bf, bb, ab, n);
+    }
+    return v;
+}
+
+static std::vector<float> generateTriangularPrismWireframe(float sideLen, float depth, bool rightAngle) {
+    std::vector<float> v;
+    float hd = depth * 0.5f;
+
+    glm::vec3 p0, p1, p2;
+    if (rightAngle) {
+        float leg = sideLen;
+        p0 = {-leg*0.5f, -leg*0.5f, 0};
+        p1 = { leg*0.5f, -leg*0.5f, 0};
+        p2 = {-leg*0.5f,  leg*0.5f, 0};
+    } else {
+        float h = sideLen * 0.866f;
+        float cy = h / 3.0f;
+        p0 = {0, h - cy, 0};
+        p1 = {-sideLen*0.5f, -cy, 0};
+        p2 = { sideLen*0.5f, -cy, 0};
+    }
+
+    glm::vec3 pts[3] = {p0, p1, p2};
+    // Front face edges
+    for (int i = 0; i < 3; i++) {
+        glm::vec3 a = pts[i] + glm::vec3(0,0,hd);
+        glm::vec3 b = pts[(i+1)%3] + glm::vec3(0,0,hd);
+        v.push_back(a.x); v.push_back(a.y); v.push_back(a.z);
+        v.push_back(b.x); v.push_back(b.y); v.push_back(b.z);
+    }
+    // Back face edges
+    for (int i = 0; i < 3; i++) {
+        glm::vec3 a = pts[i] + glm::vec3(0,0,-hd);
+        glm::vec3 b = pts[(i+1)%3] + glm::vec3(0,0,-hd);
+        v.push_back(a.x); v.push_back(a.y); v.push_back(a.z);
+        v.push_back(b.x); v.push_back(b.y); v.push_back(b.z);
+    }
+    // Connecting edges
+    for (int i = 0; i < 3; i++) {
+        glm::vec3 a = pts[i] + glm::vec3(0,0,hd);
+        glm::vec3 b = pts[i] + glm::vec3(0,0,-hd);
+        v.push_back(a.x); v.push_back(a.y); v.push_back(a.z);
+        v.push_back(b.x); v.push_back(b.y); v.push_back(b.z);
+    }
+    return v;
+}
+
+void Viewport::initPrototypeGeometry() {
+    if (prototypesInitialized) return;
+
+    // Solid geometry for each built-in ElementType
+    prototypeGeometry[(int)ElementType::Laser]        = createCachedMesh(generateCubeSolid(1.0f));
+    prototypeGeometry[(int)ElementType::Mirror]       = createCachedMesh(generateSphereSolid(0.5f, 16));
+    prototypeGeometry[(int)ElementType::Lens]         = createCachedMesh(generateTorusSolid(0.4f, 0.15f, 16, 8));
+    prototypeGeometry[(int)ElementType::BeamSplitter] = createCachedMesh(generateCylinderSolid(0.4f, 0.8f, 16));
+    prototypeGeometry[(int)ElementType::Detector]     = createCachedMesh(generatePlaneSolid(1.0f));
+    prototypeGeometry[(int)ElementType::Filter]       = createCachedMesh(generateCylinderSolid(0.5f, 0.05f, 24));
+    prototypeGeometry[(int)ElementType::Aperture]     = createCachedMesh(generateAnnularRingSolid(0.5f, 0.15f, 0.06f, 24));
+    prototypeGeometry[(int)ElementType::Prism]        = createCachedMesh(generateTriangularPrismSolid(1.0f, 1.0f, false));
+    prototypeGeometry[(int)ElementType::PrismRA]      = createCachedMesh(generateTriangularPrismSolid(1.0f, 1.0f, true));
+    prototypeGeometry[(int)ElementType::Grating]      = createCachedMesh(generateBoxSolid(1.0f, 1.0f, 0.04f));
+    prototypeGeometry[(int)ElementType::FiberCoupler] = createCachedMesh(generateCylinderSolid(0.15f, 0.8f, 12));
+    prototypeGeometry[(int)ElementType::Screen]       = createCachedMesh(generateBoxSolid(1.5f, 2.0f, 0.1f));
+    prototypeGeometry[(int)ElementType::Mount]        = createCachedMesh(generateCylinderSolid(0.08f, 1.5f, 12));
+
+    // Wireframe geometry (needs pos+normal format for the shader)
+    prototypeWireframe[(int)ElementType::Laser]        = createCachedMesh(wireframeLinesToVertices(generateCubeWireframe(1.0f)));
+    prototypeWireframe[(int)ElementType::Mirror]       = createCachedMesh(wireframeLinesToVertices(generateSphereWireframe(0.5f, 16)));
+    prototypeWireframe[(int)ElementType::Lens]         = createCachedMesh(wireframeLinesToVertices(generateTorusWireframe(0.4f, 0.15f, 16, 8)));
+    prototypeWireframe[(int)ElementType::BeamSplitter] = createCachedMesh(wireframeLinesToVertices(generateCylinderWireframe(0.4f, 0.8f, 16)));
+    prototypeWireframe[(int)ElementType::Detector]     = createCachedMesh(wireframeLinesToVertices(generatePlaneWireframeQuads(1.0f)));
+    prototypeWireframe[(int)ElementType::Filter]       = createCachedMesh(wireframeLinesToVertices(generateCylinderWireframe(0.5f, 0.05f, 24)));
+    prototypeWireframe[(int)ElementType::Aperture]     = createCachedMesh(wireframeLinesToVertices(generateAnnularRingWireframe(0.5f, 0.15f, 0.06f, 24)));
+    prototypeWireframe[(int)ElementType::Prism]        = createCachedMesh(wireframeLinesToVertices(generateTriangularPrismWireframe(1.0f, 1.0f, false)));
+    prototypeWireframe[(int)ElementType::PrismRA]      = createCachedMesh(wireframeLinesToVertices(generateTriangularPrismWireframe(1.0f, 1.0f, true)));
+    prototypeWireframe[(int)ElementType::Grating]      = createCachedMesh(wireframeLinesToVertices(generateBoxWireframe(1.0f, 1.0f, 0.04f)));
+    prototypeWireframe[(int)ElementType::FiberCoupler] = createCachedMesh(wireframeLinesToVertices(generateCylinderWireframe(0.15f, 0.8f, 12)));
+    prototypeWireframe[(int)ElementType::Screen]       = createCachedMesh(wireframeLinesToVertices(generateBoxWireframe(1.5f, 2.0f, 0.1f)));
+    prototypeWireframe[(int)ElementType::Mount]        = createCachedMesh(wireframeLinesToVertices(generateCylinderWireframe(0.08f, 1.5f, 12)));
+
+    prototypesInitialized = true;
+}
+
 void Viewport::renderScene(Scene* scene, bool forExport) {
     if (!scene) return;
-    
+
+    if (!prototypesInitialized) initPrototypeGeometry();
+
+    // Clean up stale mesh cache entries (for deleted ImportedMesh elements)
+    if (!meshCache.empty()) {
+        const auto& elements = scene->getElements();
+        auto it = meshCache.begin();
+        while (it != meshCache.end()) {
+            bool found = false;
+            for (const auto& elem : elements) {
+                if (elem->id == it->first) { found = true; break; }
+            }
+            if (!found) {
+                deleteCachedMesh(it->second);
+                it = meshCache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // Disable face culling for solid elements — generators have mixed winding
+    // conventions; per-vertex normals handle lighting correctly, and depth
+    // testing is sufficient for correct visual ordering.
+    glDisable(GL_CULL_FACE);
+
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
-    
+
     for (const auto& elem : scene->getElements()) {
         if (!elem->visible) continue;
-        
+
         glm::mat4 model = elem->transform.getMatrix();
         gridShader.setMat4("uModel", model);
-        
-        // Set color based on element type
+
+        // Determine color and which cached mesh to use
         glm::vec3 color;
-        std::vector<float> vertices;
-        
+        CachedMesh* solidMesh = nullptr;
+
+        int typeIdx = static_cast<int>(elem->type);
         switch (elem->type) {
-            case ElementType::Laser:
-                color = glm::vec3(1.0f, 0.2f, 0.2f); // Red
-                vertices = generateCubeSolid(1.0f);
-                break;
-            case ElementType::Mirror:
-                color = glm::vec3(0.8f, 0.8f, 0.9f); // Silver
-                vertices = generateSphereSolid(0.5f, 16);
-                break;
-            case ElementType::Lens:
-                color = glm::vec3(0.7f, 0.9f, 1.0f); // Light blue
-                vertices = generateTorusSolid(0.4f, 0.15f, 16, 8);
-                break;
-            case ElementType::BeamSplitter:
-                color = glm::vec3(0.9f, 0.9f, 0.7f); // Yellow
-                vertices = generateCylinderSolid(0.4f, 0.8f, 16);
-                break;
-            case ElementType::Detector:
-                color = glm::vec3(0.2f, 1.0f, 0.2f); // Green
-                vertices = generatePlaneSolid(1.0f);
-                break;
+            case ElementType::Laser:        color = glm::vec3(1.0f, 0.2f, 0.2f); break;
+            case ElementType::Mirror:       color = glm::vec3(0.8f, 0.8f, 0.9f); break;
+            case ElementType::Lens:         color = glm::vec3(0.7f, 0.9f, 1.0f); break;
+            case ElementType::BeamSplitter: color = glm::vec3(0.9f, 0.9f, 0.7f); break;
+            case ElementType::Detector:     color = glm::vec3(0.2f, 1.0f, 0.2f); break;
+            case ElementType::Filter:       color = glm::vec3(0.6f, 0.4f, 0.8f); break;
+            case ElementType::Aperture:     color = glm::vec3(0.8f, 0.6f, 0.3f); break;
+            case ElementType::Prism:        color = glm::vec3(0.5f, 0.8f, 0.9f); break;
+            case ElementType::PrismRA:      color = glm::vec3(0.5f, 0.8f, 0.9f); break;
+            case ElementType::Grating:      color = glm::vec3(0.7f, 0.5f, 0.3f); break;
+            case ElementType::FiberCoupler: color = glm::vec3(1.0f, 0.6f, 0.2f); break;
+            case ElementType::Screen:       color = glm::vec3(0.3f, 0.8f, 0.3f); break;
+            case ElementType::Mount:        color = glm::vec3(0.5f, 0.5f, 0.55f); break;
+            case ElementType::ImportedMesh: color = glm::vec3(0.7f, 0.7f, 0.7f); break;
         }
-        
-        // Highlight selected elements (skip for export: no highlight, no wireframe)
+
+        if (elem->type == ElementType::ImportedMesh) {
+            // Per-instance cache for imported meshes
+            auto it = meshCache.find(elem->id);
+            if (it == meshCache.end()) {
+                auto inserted = meshCache.emplace(elem->id, createCachedMesh(elem->meshVertices));
+                solidMesh = &inserted.first->second;
+            } else {
+                solidMesh = &it->second;
+            }
+        } else {
+            solidMesh = &prototypeGeometry[typeIdx];
+        }
+
         bool isSelected = !forExport && (scene->getSelectedElement() == elem.get());
-        if (isSelected) {
-            // Make selected elements brighter
-            color = color * 1.3f; // Brighten
-        }
-        
-        // Calculate normal matrix for lighting
+        if (isSelected) color = color * 1.3f;
+
         glm::mat3 normalMatrix = glm::mat3(glm::transpose(glm::inverse(model)));
-        
         gridShader.setVec3("uColor", color);
         gridShader.setFloat("uAlpha", isSelected ? 1.0f : 0.9f);
         gridShader.setMat3("uNormalMatrix", normalMatrix);
-        
-        // Set light position (camera position for now)
-        glm::vec3 lightPos = camera.position;
-        gridShader.setVec3("uLightPos", lightPos);
+        gridShader.setVec3("uLightPos", camera.position);
         gridShader.setVec3("uViewPos", camera.position);
-        
-        GLuint shapeVAO, shapeVBO;
-        glGenVertexArrays(1, &shapeVAO);
-        glGenBuffers(1, &shapeVBO);
-        
-        glBindVertexArray(shapeVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, shapeVBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-        
-        // Position attribute (location 0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        // Normal attribute (location 1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-        
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size() / 6));
-        
-        // Selected: quad-style wireframe overlay (GL_LINES, no triangle diagonals). Skip when forExport.
-        if (isSelected && !forExport) {
-            std::vector<float> wfLines;
-            switch (elem->type) {
-                case ElementType::Laser:    wfLines = generateCubeWireframe(1.0f); break;
-                case ElementType::Mirror:   wfLines = generateSphereWireframe(0.5f, 16); break;
-                case ElementType::Lens:     wfLines = generateTorusWireframe(0.4f, 0.15f, 16, 8); break;
-                case ElementType::BeamSplitter: wfLines = generateCylinderWireframe(0.4f, 0.8f, 16); break;
-                case ElementType::Detector: wfLines = generatePlaneWireframeQuads(1.0f); break;
-            }
-            if (!wfLines.empty()) {
-                std::vector<float> wfVertices = wireframeLinesToVertices(wfLines);
-                GLuint wfVAO, wfVBO;
-                glGenVertexArrays(1, &wfVAO);
-                glGenBuffers(1, &wfVBO);
-                glBindVertexArray(wfVAO);
-                glBindBuffer(GL_ARRAY_BUFFER, wfVBO);
-                glBufferData(GL_ARRAY_BUFFER, wfVertices.size() * sizeof(float), wfVertices.data(), GL_STATIC_DRAW);
-                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-                glEnableVertexAttribArray(0);
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-                glEnableVertexAttribArray(1);
+
+        if (solidMesh && solidMesh->vao != 0) {
+            glBindVertexArray(solidMesh->vao);
+            glDrawArrays(GL_TRIANGLES, 0, solidMesh->vertexCount);
+        }
+
+        // Wireframe overlay for selected elements
+        if (isSelected && !forExport && elem->type != ElementType::ImportedMesh) {
+            CachedMesh& wf = prototypeWireframe[typeIdx];
+            if (wf.vao != 0) {
+                glBindVertexArray(wf.vao);
                 glLineWidth(1.4f);
                 gridShader.setVec3("uColor", glm::vec3(0.2f, 1.0f, 0.2f));
                 gridShader.setFloat("uAlpha", 1.0f);
-                glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(wfVertices.size() / 6));
+                glDrawArrays(GL_LINES, 0, wf.vertexCount);
                 glLineWidth(1.0f);
-                glDeleteVertexArrays(1, &wfVAO);
-                glDeleteBuffers(1, &wfVBO);
             }
         }
-        
-        glDeleteVertexArrays(1, &shapeVAO);
-        glDeleteBuffers(1, &shapeVBO);
     }
-    
+
+    glBindVertexArray(0);
     glLineWidth(1.0f);
+
+    // Re-enable face culling for subsequent passes
+    glEnable(GL_CULL_FACE);
 }
 
 void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
@@ -801,6 +1085,26 @@ void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+    gridShader.setMat4("uModel", glm::mat4(1.0f));
+    gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
+    gridShader.setVec3("uLightPos", camera.position);
+    gridShader.setVec3("uViewPos", camera.position);
+
+    // Lazy-init reusable beam buffer
+    if (beamBuffer.vao == 0) {
+        glGenVertexArrays(1, &beamBuffer.vao);
+        glGenBuffers(1, &beamBuffer.vbo);
+        glBindVertexArray(beamBuffer.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    glBindVertexArray(beamBuffer.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
 
     for (const auto& beam : scene->getBeams()) {
         if (!beam->visible) continue;
@@ -808,37 +1112,20 @@ void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
         bool isSelected = (selectedBeam == beam.get());
         glLineWidth(isSelected ? 4.0f : 2.0f);
 
-        // Create line vertices (position + normal)
-        std::vector<float> vertices = {
+        float vertices[12] = {
             beam->start.x, beam->start.y, beam->start.z, 0.0f, 0.0f, 1.0f,
             beam->end.x, beam->end.y, beam->end.z, 0.0f, 0.0f, 1.0f
         };
 
-        glm::mat4 model = glm::mat4(1.0f);
-        gridShader.setMat4("uModel", model);
-        // Selected beam renders white, otherwise its own color
         gridShader.setVec3("uColor", isSelected ? glm::vec3(1.0f, 1.0f, 1.0f) : beam->color);
         gridShader.setFloat("uAlpha", 1.0f);
 
-        GLuint beamVAO, beamVBO;
-        glGenVertexArrays(1, &beamVAO);
-        glGenBuffers(1, &beamVBO);
-
-        glBindVertexArray(beamVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
-        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-
+        // Buffer orphaning: upload new data into existing buffer
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
         glDrawArrays(GL_LINES, 0, 2);
-
-        glDeleteVertexArrays(1, &beamVAO);
-        glDeleteBuffers(1, &beamVBO);
     }
 
+    glBindVertexArray(0);
     glLineWidth(1.0f);
 }
 
@@ -846,36 +1133,38 @@ void Viewport::renderBeam(const Beam& beam) {
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
-    
-    std::vector<float> vertices = {
+    gridShader.setMat4("uModel", glm::mat4(1.0f));
+    gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
+    gridShader.setVec3("uLightPos", camera.position);
+    gridShader.setVec3("uViewPos", camera.position);
+    gridShader.setVec3("uColor", beam.color);
+    gridShader.setFloat("uAlpha", 0.7f);
+
+    // Lazy-init reusable beam buffer
+    if (beamBuffer.vao == 0) {
+        glGenVertexArrays(1, &beamBuffer.vao);
+        glGenBuffers(1, &beamBuffer.vbo);
+        glBindVertexArray(beamBuffer.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    float vertices[12] = {
         beam.start.x, beam.start.y, beam.start.z, 0.0f, 0.0f, 1.0f,
         beam.end.x, beam.end.y, beam.end.z, 0.0f, 0.0f, 1.0f
     };
-    
-    glm::mat4 model = glm::mat4(1.0f);
-    gridShader.setMat4("uModel", model);
-    gridShader.setVec3("uColor", beam.color);
-    gridShader.setFloat("uAlpha", 0.7f); // Semi-transparent for preview
-    
-    GLuint beamVAO, beamVBO;
-    glGenVertexArrays(1, &beamVAO);
-    glGenBuffers(1, &beamVBO);
-    
-    glBindVertexArray(beamVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, beamVBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
-    
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    
+
+    glBindVertexArray(beamBuffer.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
     glLineWidth(beam.width);
     glDrawArrays(GL_LINES, 0, 2);
     glLineWidth(1.0f);
-    
-    glDeleteVertexArrays(1, &beamVAO);
-    glDeleteBuffers(1, &beamVBO);
+    glBindVertexArray(0);
 }
 
 void Viewport::renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle) {

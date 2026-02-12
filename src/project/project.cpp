@@ -38,6 +38,15 @@ static const char* typeToString(ElementType t) {
         case ElementType::Lens:         return "Lens";
         case ElementType::BeamSplitter:  return "BeamSplitter";
         case ElementType::Detector:     return "Detector";
+        case ElementType::Filter:       return "Filter";
+        case ElementType::Aperture:     return "Aperture";
+        case ElementType::Prism:        return "Prism";
+        case ElementType::PrismRA:      return "PrismRA";
+        case ElementType::Grating:      return "Grating";
+        case ElementType::FiberCoupler: return "FiberCoupler";
+        case ElementType::Screen:       return "Screen";
+        case ElementType::Mount:        return "Mount";
+        case ElementType::ImportedMesh: return "ImportedMesh";
         default:                         return "Laser";
     }
 }
@@ -47,6 +56,15 @@ static ElementType stringToType(const std::string& s) {
     if (s == "Lens") return ElementType::Lens;
     if (s == "BeamSplitter") return ElementType::BeamSplitter;
     if (s == "Detector") return ElementType::Detector;
+    if (s == "Filter") return ElementType::Filter;
+    if (s == "Aperture") return ElementType::Aperture;
+    if (s == "Prism") return ElementType::Prism;
+    if (s == "PrismRA") return ElementType::PrismRA;
+    if (s == "Grating") return ElementType::Grating;
+    if (s == "FiberCoupler") return ElementType::FiberCoupler;
+    if (s == "Screen") return ElementType::Screen;
+    if (s == "Mount") return ElementType::Mount;
+    if (s == "ImportedMesh") return ElementType::ImportedMesh;
     return ElementType::Laser;
 }
 
@@ -68,7 +86,11 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "scale " << e.transform.scale.x << " " << e.transform.scale.y << " " << e.transform.scale.z << "\n";
         f << "visible " << (e.visible ? 1 : 0) << "\n";
         f << "locked " << (e.locked ? 1 : 0) << "\n";
+        f << "showlabel " << (e.showLabel ? 1 : 0) << "\n";
         f << "layer " << e.layer << "\n";
+        if (e.type == ElementType::ImportedMesh && !e.meshSourcePath.empty()) {
+            f << "meshpath " << e.meshSourcePath << "\n";
+        }
         f << "end\n";
     }
     // Save beams
@@ -91,11 +113,11 @@ bool saveProject(const std::string& path, Scene* scene) {
 }
 
 static bool parseElementBlock(std::istream& in, Scene* scene) {
-    std::string typeStr = "Laser", id, label;
+    std::string typeStr = "Laser", id, label, meshpath;
     float px = 0, py = 0, pz = 0;
     float qx = 0, qy = 0, qz = 0, qw = 1;
     float sx = 1, sy = 1, sz = 1;
-    int visible = 1, locked = 0, layer = 0;
+    int visible = 1, locked = 0, showlabel = 1, layer = 0;
 
     std::string line;
     while (std::getline(in, line)) {
@@ -125,13 +147,23 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
             visible = std::stoi(line.substr(8));
         } else if (line.compare(0, 7, "locked ") == 0) {
             locked = std::stoi(line.substr(7));
+        } else if (line.compare(0, 10, "showlabel ") == 0) {
+            showlabel = std::stoi(line.substr(10));
         } else if (line.compare(0, 6, "layer ") == 0) {
             layer = std::stoi(line.substr(6));
+        } else if (line.compare(0, 9, "meshpath ") == 0) {
+            meshpath = line.substr(9);
+            trim(meshpath);
         }
     }
 
     ElementType type = stringToType(typeStr);
-    std::unique_ptr<Element> elem = createElement(type, id);
+    std::unique_ptr<Element> elem;
+    if (type == ElementType::ImportedMesh && !meshpath.empty()) {
+        elem = createMeshElement(meshpath, id);
+    } else {
+        elem = createElement(type, id);
+    }
     if (!elem) return false;
 
     elem->label = label;
@@ -140,6 +172,7 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     elem->transform.scale = glm::vec3(sx, sy, sz);
     elem->visible = (visible != 0);
     elem->locked = (locked != 0);
+    elem->showLabel = (showlabel != 0);
     elem->layer = layer;
 
     scene->addElement(std::move(elem));

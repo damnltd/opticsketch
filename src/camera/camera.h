@@ -51,6 +51,9 @@ public:
     
     // Reset to initial view
     void resetView(); // Reset camera to initial Perspective3D state
+
+    // Frame camera on a point with given bounding radius
+    void frameOn(const glm::vec3& center, float boundsRadius);
     
 private:
     float distance = 10.0f;  // Distance from target

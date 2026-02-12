@@ -12,6 +12,15 @@ Element::Element(ElementType t, const std::string& elementId)
         case ElementType::Lens: label = "Lens"; break;
         case ElementType::BeamSplitter: label = "Beam Splitter"; break;
         case ElementType::Detector: label = "Detector"; break;
+        case ElementType::Filter: label = "Filter"; break;
+        case ElementType::Aperture: label = "Aperture"; break;
+        case ElementType::Prism: label = "Prism"; break;
+        case ElementType::PrismRA: label = "Prism RA"; break;
+        case ElementType::Grating: label = "Grating"; break;
+        case ElementType::FiberCoupler: label = "Fiber Coupler"; break;
+        case ElementType::Screen: label = "Screen"; break;
+        case ElementType::Mount: label = "Mount"; break;
+        case ElementType::ImportedMesh: break;
     }
 }
 
@@ -45,6 +54,21 @@ glm::vec3 Element::getWorldBoundsCenter() const {
     glm::vec3 outMin, outMax;
     getWorldBounds(outMin, outMax);
     return (outMin + outMax) * 0.5f;
+}
+
+std::unique_ptr<Element> Element::clone() const {
+    auto e = std::make_unique<Element>(type, ""); // empty ID — Scene::addElement will ensure uniqueness
+    e->label = label;
+    e->transform = transform;
+    e->locked = locked;
+    e->visible = visible;
+    e->showLabel = showLabel;
+    e->layer = layer;
+    e->boundsMin = boundsMin;
+    e->boundsMax = boundsMax;
+    e->meshVertices = meshVertices;
+    e->meshSourcePath = meshSourcePath;
+    return e;
 }
 
 } // namespace opticsketch

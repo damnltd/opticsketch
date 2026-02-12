@@ -14,6 +14,7 @@ struct LibraryItem {
     std::string category;
     ElementType type;
     std::string icon; // For future icon support
+    std::string meshPath; // non-empty for imported OBJ items
 };
 
 class LibraryPanel {
@@ -26,11 +27,17 @@ public:
     bool isVisible() const { return visible; }
     void setVisible(bool v) { visible = v; }
     
+    // Add an imported OBJ item to the library
+    void addImportedItem(const std::string& name, const std::string& objPath);
+
+    // Get items list (for drag-drop payload lookup)
+    const std::vector<LibraryItem>& getItems() const { return items; }
+
     // Set callback for when element is dragged/dropped
     void setOnElementDrag(std::function<void(ElementType, const std::string&)> callback) {
         onElementDrag = callback;
     }
-    
+
 private:
     bool visible = true;
     std::vector<LibraryItem> items;

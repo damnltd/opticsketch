@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include "camera/camera.h"
 #include "render/shader.h"
 #include "render/gizmo.h"
@@ -14,6 +15,11 @@ namespace opticsketch {
 class Element;
 class Scene;
 class Beam;
+
+struct CachedMesh {
+    GLuint vao = 0, vbo = 0;
+    GLsizei vertexCount = 0;
+};
 
 class Viewport {
 public:
@@ -85,10 +91,23 @@ private:
     GLuint gridVAO = 0;
     GLuint gridVBO = 0;
     bool gridInitialized = false;
-    
+
+    // Cached geometry for built-in element types (indexed by (int)ElementType)
+    static constexpr int kMaxPrototypes = 16;
+    CachedMesh prototypeGeometry[kMaxPrototypes];
+    CachedMesh prototypeWireframe[kMaxPrototypes];
+    bool prototypesInitialized = false;
+
+    // Per-instance mesh cache for ImportedMesh elements (keyed by element ID)
+    std::unordered_map<std::string, CachedMesh> meshCache;
+
+    // Reusable buffer for beam rendering
+    CachedMesh beamBuffer;
+
     void createFramebuffer();
     void destroyFramebuffer();
     void initGrid();
+    void initPrototypeGeometry();
 };
 
 } // namespace opticsketch

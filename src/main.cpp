@@ -4,10 +4,12 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <cmath>
+#include <cfloat>
 #include <cstdlib>
 #include <string>
 #include <glm/gtc/quaternion.hpp>
 #include <tinyfiledialogs.h>
+#include <filesystem>
 #include "ui/theme.h"
 #include "ui/library_panel.h"
 #include "ui/toolbox_panel.h"
@@ -17,9 +19,11 @@
 #include "render/raycast.h"
 #include "render/gizmo.h"
 #include "render/beam.h"
+#include "render/mesh_loader.h"
 #include "scene/scene.h"
 #include "project/project.h"
 #include "elements/basic_elements.h"
+#include "undo/undo.h"
 
 // Ensure path ends with .optsk for save (so Open can find the file)
 static std::string ensureOptskExtension(const std::string& path) {
@@ -135,6 +139,13 @@ int main() {
     // Create scene
     opticsketch::Scene scene;
     std::string projectPath;  // current .optsk path; empty = untitled
+
+    // Undo/Redo stack
+    opticsketch::UndoStack undoStack;
+
+    // Clipboard for copy/paste
+    std::unique_ptr<opticsketch::Element> clipboardElement;
+    std::unique_ptr<opticsketch::Beam> clipboardBeam;
 
     // Create library panel
     opticsketch::LibraryPanel libraryPanel;
@@ -255,6 +266,7 @@ int main() {
             // File shortcuts
             if (ctrl && glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) {
                 scene.clear();
+                undoStack.clear();
                 projectPath.clear();
                 glfwSetWindowTitle(window, "OpticSketch - Untitled");
             }
@@ -289,6 +301,7 @@ int main() {
                 if (path) {
                     std::string openPath = trimPath(path);
                     if (!openPath.empty() && opticsketch::loadProject(openPath, &scene)) {
+                        undoStack.clear();
                         projectPath = openPath;
                         glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                     } else if (!openPath.empty())
@@ -315,8 +328,10 @@ int main() {
             bool backNow = glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS;
             if ((delNow && !delPressed) || (backNow && !backPressed)) {
                 if (scene.getSelectedElement()) {
+                    undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*scene.getSelectedElement()));
                     scene.removeElement(scene.getSelectedElement()->id);
                 } else if (scene.getSelectedBeam()) {
+                    undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*scene.getSelectedBeam()));
                     scene.removeBeam(scene.getSelectedBeam()->id);
                 }
             }
@@ -327,6 +342,122 @@ int main() {
             if (glfwGetKey(window, GLFW_KEY_HOME) == GLFW_PRESS) {
                 viewport.getCamera().resetView();
             }
+
+            // F = Frame Selected, A = Frame All
+            static bool fPressed = false, aPressed = false;
+            bool fNow = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+            bool aNow = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
+            if (fNow && !fPressed) {
+                auto* selElem = scene.getSelectedElement();
+                auto* selBeam = scene.getSelectedBeam();
+                if (selElem) {
+                    glm::vec3 bMin, bMax;
+                    selElem->getWorldBounds(bMin, bMax);
+                    glm::vec3 center = (bMin + bMax) * 0.5f;
+                    float radius = glm::length(bMax - bMin) * 0.5f;
+                    viewport.getCamera().frameOn(center, radius);
+                } else if (selBeam) {
+                    glm::vec3 center = (selBeam->start + selBeam->end) * 0.5f;
+                    float radius = glm::length(selBeam->end - selBeam->start) * 0.5f;
+                    viewport.getCamera().frameOn(center, radius);
+                }
+            }
+            if (aNow && !aPressed) {
+                glm::vec3 sceneMin(FLT_MAX), sceneMax(-FLT_MAX);
+                bool hasObjects = false;
+                for (const auto& elem : scene.getElements()) {
+                    if (!elem->visible) continue;
+                    glm::vec3 wMin, wMax;
+                    elem->getWorldBounds(wMin, wMax);
+                    sceneMin = glm::min(sceneMin, wMin);
+                    sceneMax = glm::max(sceneMax, wMax);
+                    hasObjects = true;
+                }
+                for (const auto& beam : scene.getBeams()) {
+                    if (!beam->visible) continue;
+                    sceneMin = glm::min(sceneMin, glm::min(beam->start, beam->end));
+                    sceneMax = glm::max(sceneMax, glm::max(beam->start, beam->end));
+                    hasObjects = true;
+                }
+                if (hasObjects) {
+                    glm::vec3 center = (sceneMin + sceneMax) * 0.5f;
+                    float radius = glm::length(sceneMax - sceneMin) * 0.5f;
+                    viewport.getCamera().frameOn(center, radius);
+                } else {
+                    viewport.getCamera().resetView();
+                }
+            }
+            fPressed = fNow;
+            aPressed = aNow;
+
+            // Undo/Redo: Ctrl+Z / Ctrl+Y
+            static bool zPressed = false, yPressed = false;
+            bool zNow = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
+            bool yNow = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
+            if (ctrl && zNow && !zPressed) {
+                undoStack.undo(scene);
+            }
+            if (ctrl && yNow && !yPressed) {
+                undoStack.redo(scene);
+            }
+            zPressed = zNow;
+            yPressed = yNow;
+
+            // Copy/Cut/Paste: Ctrl+C / Ctrl+X / Ctrl+V
+            static bool cPressed = false, xPressed = false, vPressed = false;
+            bool cNow = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
+            bool xNow = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
+            bool vNow = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
+            if (ctrl && cNow && !cPressed) {
+                // Copy selected element or beam
+                clipboardElement.reset();
+                clipboardBeam.reset();
+                if (scene.getSelectedElement()) {
+                    clipboardElement = scene.getSelectedElement()->clone();
+                } else if (scene.getSelectedBeam()) {
+                    clipboardBeam = scene.getSelectedBeam()->clone();
+                }
+            }
+            if (ctrl && xNow && !xPressed) {
+                // Cut = copy + delete
+                clipboardElement.reset();
+                clipboardBeam.reset();
+                if (scene.getSelectedElement()) {
+                    auto* sel = scene.getSelectedElement();
+                    clipboardElement = sel->clone();
+                    undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*sel));
+                    scene.removeElement(sel->id);
+                } else if (scene.getSelectedBeam()) {
+                    auto* sel = scene.getSelectedBeam();
+                    clipboardBeam = sel->clone();
+                    undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*sel));
+                    scene.removeBeam(sel->id);
+                }
+            }
+            if (ctrl && vNow && !vPressed) {
+                // Paste from clipboard
+                if (clipboardElement) {
+                    auto pasted = clipboardElement->clone();
+                    pasted->transform.position += glm::vec3(1.0f, 0.0f, 0.0f); // offset
+                    std::string pastedId = pasted->id;
+                    scene.addElement(std::move(pasted));
+                    // ID may have been adjusted by ensureUniqueId — find by scanning last element
+                    auto* added = scene.getElements().back().get();
+                    undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));
+                    scene.selectElement(added->id);
+                } else if (clipboardBeam) {
+                    auto pasted = clipboardBeam->clone();
+                    pasted->start += glm::vec3(1.0f, 0.0f, 0.0f);
+                    pasted->end += glm::vec3(1.0f, 0.0f, 0.0f);
+                    scene.addBeam(std::move(pasted));
+                    auto* added = scene.getBeams().back().get();
+                    undoStack.push(std::make_unique<opticsketch::AddBeamCmd>(*added));
+                    scene.selectBeam(added->id);
+                }
+            }
+            cPressed = cNow;
+            xPressed = xNow;
+            vPressed = vNow;
         }
         
         ImGui_ImplOpenGL3_NewFrame();
@@ -339,6 +470,8 @@ int main() {
         static bool showAboutDialog = false;
         static bool aboutDialogOpen = false;
         static bool viewportWindowVisible = true;
+        static bool showViewportLabels = true;
+        static bool showGridScale = true;
 
         // Menu bar
         if (ImGui::BeginMainMenuBar()) {
@@ -402,6 +535,30 @@ int main() {
                     }
                 }
                 ImGui::Separator();
+                if (ImGui::MenuItem("Import OBJ...")) {
+                    const char* filters[] = { "*.obj" };
+                    const char* path = tinyfd_openFileDialog("Import OBJ Mesh", nullptr, 1, filters, "Wavefront OBJ (*.obj)", 0);
+                    if (path) {
+                        std::string objPath = trimPath(path);
+                        if (!objPath.empty()) {
+                            // Copy to assets/meshes/ folder
+                            namespace fs = std::filesystem;
+                            fs::path src(objPath);
+                            fs::path meshDir = fs::path(".") / "assets" / "meshes";
+                            fs::create_directories(meshDir);
+                            fs::path dst = meshDir / src.filename();
+                            if (src != dst) {
+                                std::error_code ec;
+                                fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+                                if (!ec) objPath = dst.string();
+                            }
+                            // Derive display name from filename
+                            std::string name = src.stem().string();
+                            libraryPanel.addImportedItem(name, objPath);
+                        }
+                    }
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Exit", "Alt+F4")) {
                     glfwSetWindowShouldClose(window, true);
                 }
@@ -409,28 +566,65 @@ int main() {
             }
             
             // Edit menu
+            bool hasSelection = scene.getSelectedElement() != nullptr || scene.getSelectedBeam() != nullptr;
+            bool hasClipboard = clipboardElement != nullptr || clipboardBeam != nullptr;
             if (ImGui::BeginMenu("Edit")) {
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, false)) {
-                    // TODO: Undo
+                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, undoStack.canUndo())) {
+                    undoStack.undo(scene);
                 }
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, false)) {
-                    // TODO: Redo
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, false)) {
-                    // TODO: Cut
-                }
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, false)) {
-                    // TODO: Copy
-                }
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, false)) {
-                    // TODO: Paste
+                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, undoStack.canRedo())) {
+                    undoStack.redo(scene);
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del", false, scene.getSelectedElement() != nullptr || scene.getSelectedBeam() != nullptr)) {
+                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection)) {
+                    clipboardElement.reset();
+                    clipboardBeam.reset();
                     if (scene.getSelectedElement()) {
+                        auto* sel = scene.getSelectedElement();
+                        clipboardElement = sel->clone();
+                        undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*sel));
+                        scene.removeElement(sel->id);
+                    } else if (scene.getSelectedBeam()) {
+                        auto* sel = scene.getSelectedBeam();
+                        clipboardBeam = sel->clone();
+                        undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*sel));
+                        scene.removeBeam(sel->id);
+                    }
+                }
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection)) {
+                    clipboardElement.reset();
+                    clipboardBeam.reset();
+                    if (scene.getSelectedElement()) {
+                        clipboardElement = scene.getSelectedElement()->clone();
+                    } else if (scene.getSelectedBeam()) {
+                        clipboardBeam = scene.getSelectedBeam()->clone();
+                    }
+                }
+                if (ImGui::MenuItem("Paste", "Ctrl+V", false, hasClipboard)) {
+                    if (clipboardElement) {
+                        auto pasted = clipboardElement->clone();
+                        pasted->transform.position += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addElement(std::move(pasted));
+                        auto* added = scene.getElements().back().get();
+                        undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));
+                        scene.selectElement(added->id);
+                    } else if (clipboardBeam) {
+                        auto pasted = clipboardBeam->clone();
+                        pasted->start += glm::vec3(1.0f, 0.0f, 0.0f);
+                        pasted->end += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addBeam(std::move(pasted));
+                        auto* added = scene.getBeams().back().get();
+                        undoStack.push(std::make_unique<opticsketch::AddBeamCmd>(*added));
+                        scene.selectBeam(added->id);
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete", "Del", false, hasSelection)) {
+                    if (scene.getSelectedElement()) {
+                        undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*scene.getSelectedElement()));
                         scene.removeElement(scene.getSelectedElement()->id);
                     } else if (scene.getSelectedBeam()) {
+                        undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*scene.getSelectedBeam()));
                         scene.removeBeam(scene.getSelectedBeam()->id);
                     }
                 }
@@ -456,6 +650,9 @@ int main() {
                 if (ImGui::MenuItem("Reset View", "Home")) {
                     viewport.getCamera().resetView();
                 }
+                ImGui::Separator();
+                ImGui::MenuItem("Show Labels", nullptr, &showViewportLabels);
+                ImGui::MenuItem("Show Grid Scale", nullptr, &showGridScale);
                 ImGui::EndMenu();
             }
             
@@ -513,11 +710,12 @@ int main() {
             ImGui::Spacing();
             ImGui::Text("License: MIT");
             ImGui::Spacing();
-            
-            // Copyright with clickable link
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.6f, 1.0f, 1.0f)); // Blue color for link
-            if (ImGui::Selectable("Copyright © Damn! LTD", false, 0, ImVec2(0, 0))) {
-                // Open website in default browser
+            ImGui::Text("");
+            ImGui::Text("Copyright 2025:");
+            ImGui::Text("Jacopo Bertolotti & ");
+            ImGui::SameLine(0, 0);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
+            if (ImGui::Selectable("Damn! LTD", false, 0, ImGui::CalcTextSize("Damn! LTD"))) {
                 #ifdef PLATFORM_LINUX
                     std::system("xdg-open http://www.damnltd.com");
                 #elif defined(PLATFORM_WINDOWS)
@@ -525,13 +723,16 @@ int main() {
                 #elif defined(__APPLE__)
                     std::system("open http://www.damnltd.com");
                 #else
-                    std::system("xdg-open http://www.damnltd.com"); // Default to Linux method
+                    std::system("xdg-open http://www.damnltd.com");
                 #endif
             }
             ImGui::PopStyleColor();
-            
+
             ImGui::Spacing();
-            if (ImGui::Button("OK", ImVec2(120, 0))) {
+            float buttonWidth = 120.0f;
+            float avail = ImGui::GetContentRegionAvail().x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - buttonWidth) * 0.5f);
+            if (ImGui::Button("OK", ImVec2(buttonWidth, 0))) {
                 ImGui::CloseCurrentPopup();
                 aboutDialogOpen = false;
             }
@@ -636,6 +837,22 @@ int main() {
             } else {
                 lastGizmoHoveredHandle = -1;
             }
+            if (!app.input.leftMouseDown && manipDrag.active) {
+                // Drag just ended — push transform undo command
+                auto* selE = scene.getSelectedElement();
+                if (selE) {
+                    opticsketch::Transform newT = selE->transform;
+                    opticsketch::Transform oldT;
+                    oldT.position = manipDrag.initialPosition;
+                    oldT.rotation = manipDrag.initialRotation;
+                    oldT.scale = manipDrag.initialScale;
+                    // Only push if transform actually changed
+                    if (oldT.position != newT.position || oldT.rotation != newT.rotation || oldT.scale != newT.scale) {
+                        undoStack.push(std::make_unique<opticsketch::TransformElementCmd>(selE->id, oldT, newT));
+                    }
+                }
+                manipDrag.active = false;
+            }
             if (!app.input.leftMouseDown) manipDrag.active = false;
             static bool selectionBoxActive = false;
             static float selectionBoxStartX = 0.0f, selectionBoxStartY = 0.0f;
@@ -681,6 +898,7 @@ int main() {
                         beam->color = glm::vec3(1.0f, 0.2f, 0.2f); // Red laser beam
                         std::string beamId = beam->id;
                         scene.addBeam(std::move(beam));
+                        undoStack.push(std::make_unique<opticsketch::AddBeamCmd>(*scene.getBeams().back()));
                         scene.selectBeam(beamId);
                         
                         // Reset for next beam
@@ -1059,27 +1277,38 @@ int main() {
             
             // Set up drag-drop target on the image (must be after Image call)
             if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ELEMENT_TYPE")) {
-                    if (payload->DataSize == sizeof(opticsketch::ElementType)) {
-                        opticsketch::ElementType type = *(const opticsketch::ElementType*)payload->Data;
-                        
-                        auto elem = opticsketch::createElement(type);
-                        if (elem) {
-                            // Ray-cast from viewport center to Y=0 ground plane
-                            glm::vec3 dropPos(0.0f, 0.0f, 0.0f);
-                            float centerX = vpWidth * 0.5f;
-                            float centerY = vpHeight * 0.5f;
-                            opticsketch::Raycast::Ray dropRay = opticsketch::Raycast::screenToRay(
-                                viewport.getCamera(), centerX, centerY, vpWidth, vpHeight);
-                            if (std::abs(dropRay.direction.y) > 1e-5f) {
-                                float t = -dropRay.origin.y / dropRay.direction.y;
-                                if (t > 0.0f) {
-                                    dropPos = dropRay.origin + t * dropRay.direction;
-                                    dropPos.y = 0.0f;
-                                }
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("LIBRARY_ITEM")) {
+                    if (payload->DataSize == sizeof(int)) {
+                        int itemIndex = *(const int*)payload->Data;
+                        const auto& libItems = libraryPanel.getItems();
+                        if (itemIndex >= 0 && itemIndex < static_cast<int>(libItems.size())) {
+                            const auto& libItem = libItems[itemIndex];
+                            std::unique_ptr<opticsketch::Element> elem;
+                            if (libItem.type == opticsketch::ElementType::ImportedMesh && !libItem.meshPath.empty()) {
+                                elem = opticsketch::createMeshElement(libItem.meshPath);
+                            } else {
+                                elem = opticsketch::createElement(libItem.type);
                             }
-                            elem->transform.position = dropPos;
-                            scene.addElement(std::move(elem));
+                            if (elem) {
+                                // Ray-cast from viewport center to Y=0 ground plane
+                                glm::vec3 dropPos(0.0f, 0.0f, 0.0f);
+                                float centerX = vpWidth * 0.5f;
+                                float centerY = vpHeight * 0.5f;
+                                opticsketch::Raycast::Ray dropRay = opticsketch::Raycast::screenToRay(
+                                    viewport.getCamera(), centerX, centerY, vpWidth, vpHeight);
+                                if (std::abs(dropRay.direction.y) > 1e-5f) {
+                                    float t = -dropRay.origin.y / dropRay.direction.y;
+                                    if (t > 0.0f) {
+                                        dropPos = dropRay.origin + t * dropRay.direction;
+                                        dropPos.y = 0.0f;
+                                    }
+                                }
+                                elem->transform.position = dropPos;
+                                scene.addElement(std::move(elem));
+                                auto* added = scene.getElements().back().get();
+                                undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));
+                                scene.selectElement(added->id);
+                            }
                         }
                     }
                 }
@@ -1101,6 +1330,80 @@ int main() {
                 dl->AddRect(pmin, pmax, IM_COL32(255, 255, 255, 200), 0.0f, 0, 2.0f);
             }
             
+            // --- Viewport element label overlay ---
+            if (showViewportLabels) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                for (const auto& elem : scene.getElements()) {
+                    if (!elem->visible || !elem->showLabel) continue;
+                    glm::vec3 center = elem->getWorldBoundsCenter();
+                    glm::vec4 clip = vpMat * glm::vec4(center, 1.0f);
+                    if (clip.w <= 0.0f) continue; // behind camera
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    float sy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    // Clamp to viewport bounds
+                    if (sx < imageMin.x || sx > imageMin.x + viewportSize.x ||
+                        sy < imageMin.y || sy > imageMin.y + viewportSize.y) continue;
+                    const char* labelText = elem->label.c_str();
+                    ImVec2 textSz = ImGui::CalcTextSize(labelText);
+                    float lx = sx - textSz.x * 0.5f;
+                    float ly = sy - textSz.y - 6.0f; // above the element
+                    dl->AddRectFilled(ImVec2(lx - 3, ly - 1), ImVec2(lx + textSz.x + 3, ly + textSz.y + 1),
+                                      IM_COL32(20, 20, 25, 180), 3.0f);
+                    dl->AddText(ImVec2(lx, ly), IM_COL32(220, 220, 230, 255), labelText);
+                }
+            }
+
+            // --- Grid scale indicator ---
+            if (showGridScale) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                float gridSpacing = 25.0f; // mm, matches renderGrid default
+                ImU32 tickCol = IM_COL32(180, 180, 190, 160);
+                ImU32 textCol = IM_COL32(160, 160, 170, 200);
+
+                // Bottom edge: X axis ticks
+                for (int g = -100; g <= 100; g++) {
+                    float worldX = g * gridSpacing;
+                    glm::vec4 clip = vpMat * glm::vec4(worldX, 0.0f, 0.0f, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    float bottomY = imageMin.y + viewportSize.y;
+                    if (sx < imageMin.x || sx > imageMin.x + viewportSize.x) continue;
+                    bool major = (g % 4 == 0);
+                    float tickH = major ? 8.0f : 4.0f;
+                    dl->AddLine(ImVec2(sx, bottomY - tickH), ImVec2(sx, bottomY), tickCol);
+                    if (major) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%dmm", (int)worldX);
+                        ImVec2 tsz = ImGui::CalcTextSize(buf);
+                        dl->AddText(ImVec2(sx - tsz.x * 0.5f, bottomY - tickH - tsz.y - 1), textCol, buf);
+                    }
+                }
+
+                // Left edge: Z axis ticks
+                for (int g = -100; g <= 100; g++) {
+                    float worldZ = g * gridSpacing;
+                    glm::vec4 clip = vpMat * glm::vec4(0.0f, 0.0f, worldZ, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    float leftX = imageMin.x;
+                    if (sy < imageMin.y || sy > imageMin.y + viewportSize.y) continue;
+                    bool major = (g % 4 == 0);
+                    float tickW = major ? 8.0f : 4.0f;
+                    dl->AddLine(ImVec2(leftX, sy), ImVec2(leftX + tickW, sy), tickCol);
+                    if (major) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%d", (int)worldZ);
+                        ImVec2 tsz = ImGui::CalcTextSize(buf);
+                        dl->AddText(ImVec2(leftX + tickW + 2, sy - tsz.y * 0.5f), textCol, buf);
+                    }
+                }
+            }
+
             bool shouldDrag = isViewportHovered && ctrlPressed && !manipDrag.active &&
                              (app.input.leftMouseDown || app.input.middleMouseDown || app.input.rightMouseDown);
             
