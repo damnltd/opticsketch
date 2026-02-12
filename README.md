@@ -2,12 +2,9 @@
 
 A lightweight desktop application for creating publication-quality optical bench diagrams.
 
-## Phase 1: Foundation
+## Status
 
-This phase includes:
-- GLFW window with OpenGL 3.3 context
-- ImGui integration with Moonlight theme
-- Basic project structure
+**Phase 1 (Foundation)** and **Phase 2 (Polish & Completeness)** are complete. See DESIGN.md for the full roadmap.
 
 ## Building
 

@@ -32,36 +32,60 @@ static std::string generateId(ElementType type) {
 
 std::unique_ptr<Element> createLaser(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Laser, id.empty() ? generateId(ElementType::Laser) : id);
-    elem->boundsMin = glm::vec3(-0.5f, -0.5f, -2.0f);
-    elem->boundsMax = glm::vec3(0.5f, 0.5f, 2.0f);
+    elem->boundsMin = glm::vec3(-0.25f, -0.85f, -0.25f);
+    elem->boundsMax = glm::vec3(0.25f, 0.85f, 0.25f);
+    elem->optics.opticalType = OpticalType::Source;
+    elem->optics.reflectivity = 0.0f;
+    elem->optics.transmissivity = 0.0f;
+    elem->material.metallic = 0.3f;
+    elem->material.roughness = 0.4f;
     return elem;
 }
 
 std::unique_ptr<Element> createMirror(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Mirror, id.empty() ? generateId(ElementType::Mirror) : id);
-    elem->boundsMin = glm::vec3(-1.0f, -1.0f, -0.1f);
-    elem->boundsMax = glm::vec3(1.0f, 1.0f, 0.1f);
+    elem->boundsMin = glm::vec3(-0.55f, -0.55f, -0.06f);
+    elem->boundsMax = glm::vec3(0.55f, 0.55f, 0.06f);
+    elem->optics.opticalType = OpticalType::Mirror;
+    elem->optics.reflectivity = 1.0f;
+    elem->optics.transmissivity = 0.0f;
+    elem->material.metallic = 0.95f;
+    elem->material.roughness = 0.05f;
     return elem;
 }
 
 std::unique_ptr<Element> createLens(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Lens, id.empty() ? generateId(ElementType::Lens) : id);
-    elem->boundsMin = glm::vec3(-1.27f, -1.27f, -0.5f); // 25.4mm diameter, 5mm thick
-    elem->boundsMax = glm::vec3(1.27f, 1.27f, 0.5f);
+    elem->boundsMin = glm::vec3(-0.55f, -0.55f, -0.12f);
+    elem->boundsMax = glm::vec3(0.55f, 0.55f, 0.12f);
+    elem->optics.opticalType = OpticalType::Lens;
+    elem->optics.ior = 1.5168f;  // BK7
+    elem->optics.focalLength = 50.0f;
+    elem->optics.curvatureR1 = 100.0f;
+    elem->optics.curvatureR2 = -100.0f;
+    elem->material.transparency = 0.7f;
+    elem->material.fresnelIOR = 1.5168f;
     return elem;
 }
 
 std::unique_ptr<Element> createBeamSplitter(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::BeamSplitter, id.empty() ? generateId(ElementType::BeamSplitter) : id);
-    elem->boundsMin = glm::vec3(-1.0f, -1.0f, -1.0f);
-    elem->boundsMax = glm::vec3(1.0f, 1.0f, 1.0f);
+    elem->boundsMin = glm::vec3(-0.45f, -0.45f, -0.45f);
+    elem->boundsMax = glm::vec3(0.45f, 0.45f, 0.45f);
+    elem->optics.opticalType = OpticalType::Splitter;
+    elem->optics.reflectivity = 0.5f;
+    elem->optics.transmissivity = 0.5f;
+    elem->material.transparency = 0.4f;
     return elem;
 }
 
 std::unique_ptr<Element> createDetector(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Detector, id.empty() ? generateId(ElementType::Detector) : id);
-    elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.1f);
-    elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.1f);
+    elem->boundsMin = glm::vec3(-0.4f, -0.4f, -0.15f);
+    elem->boundsMax = glm::vec3(0.4f, 0.4f, 0.15f);
+    elem->optics.opticalType = OpticalType::Absorber;
+    elem->optics.reflectivity = 0.0f;
+    elem->optics.transmissivity = 0.0f;
     return elem;
 }
 
@@ -83,6 +107,10 @@ std::unique_ptr<Element> createPrism(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Prism, id.empty() ? generateId(ElementType::Prism) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.433f, -0.5f);
     elem->boundsMax = glm::vec3(0.5f, 0.433f, 0.5f);
+    elem->optics.opticalType = OpticalType::Prism;
+    elem->optics.ior = 1.5168f;
+    elem->material.transparency = 0.6f;
+    elem->material.fresnelIOR = 1.5168f;
     return elem;
 }
 
@@ -90,6 +118,10 @@ std::unique_ptr<Element> createPrismRA(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::PrismRA, id.empty() ? generateId(ElementType::PrismRA) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.5f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.5f);
+    elem->optics.opticalType = OpticalType::Prism;
+    elem->optics.ior = 1.5168f;
+    elem->material.transparency = 0.6f;
+    elem->material.fresnelIOR = 1.5168f;
     return elem;
 }
 
@@ -97,13 +129,14 @@ std::unique_ptr<Element> createGrating(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Grating, id.empty() ? generateId(ElementType::Grating) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.02f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.02f);
+    elem->optics.opticalType = OpticalType::Grating;
     return elem;
 }
 
 std::unique_ptr<Element> createFiberCoupler(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::FiberCoupler, id.empty() ? generateId(ElementType::FiberCoupler) : id);
-    elem->boundsMin = glm::vec3(-0.15f, -0.15f, -0.4f);
-    elem->boundsMax = glm::vec3(0.15f, 0.15f, 0.4f);
+    elem->boundsMin = glm::vec3(-0.2f, -0.4f, -0.2f);
+    elem->boundsMax = glm::vec3(0.2f, 0.4f, 0.2f);
     return elem;
 }
 
@@ -116,8 +149,11 @@ std::unique_ptr<Element> createScreen(const std::string& id) {
 
 std::unique_ptr<Element> createMount(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Mount, id.empty() ? generateId(ElementType::Mount) : id);
-    elem->boundsMin = glm::vec3(-0.08f, -0.75f, -0.08f);
-    elem->boundsMax = glm::vec3(0.08f, 0.75f, 0.08f);
+    elem->boundsMin = glm::vec3(-0.3f, -0.62f, -0.3f);
+    elem->boundsMax = glm::vec3(0.3f, 0.55f, 0.3f);
+    elem->optics.opticalType = OpticalType::Passive;
+    elem->material.metallic = 0.8f;
+    elem->material.roughness = 0.3f;
     return elem;
 }
 

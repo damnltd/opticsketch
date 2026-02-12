@@ -8,6 +8,7 @@
 #include "camera/camera.h"
 #include "render/shader.h"
 #include "render/gizmo.h"
+#include "style/scene_style.h"
 
 namespace opticsketch {
 
@@ -44,15 +45,24 @@ public:
     // Render scene elements. If forExport is true, no selection highlight or wireframe (for PNG export).
     void renderScene(Scene* scene, bool forExport = false);
     
-    // Render beams (selectedBeam is highlighted)
-    void renderBeams(Scene* scene, const Beam* selectedBeam = nullptr);
+    // Render beams (selection state read from scene)
+    void renderBeams(Scene* scene);
     
     // Render a single beam (for preview)
     void renderBeam(const Beam& beam);
+
+    // Render Gaussian beam envelopes (semi-transparent triangle strips)
+    void renderGaussianBeams(Scene* scene);
+
+    // Render focal point markers (X-shaped) for lens elements
+    void renderFocalPoints(Scene* scene);
     
     // Render gizmo for selected element; hoveredHandle: 0=X, 1=Y, 2=Z, -1=none (highlights that axis).
     // exclusiveHandle: when >= 0 (e.g. while dragging), only that axis is drawn.
     void renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
+
+    // Render gizmo at an arbitrary world-space center (for multi-select centroid, etc.)
+    void renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
     
     // Gizmo picking: returns 0=X, 1=Y, 2=Z, -1=none. viewportX/Y relative to viewport.
     int getGizmoHoveredHandle(Element* selectedElement, GizmoType gizmoType,
@@ -61,6 +71,10 @@ public:
     // Get texture ID for ImGui display
     GLuint getTextureId() const { return textureId; }
     
+    // Style
+    void setStyle(SceneStyle* s) { style = s; }
+    SceneStyle* getStyle() const { return style; }
+
     // Get camera reference
     Camera& getCamera() { return camera; }
     const Camera& getCamera() const { return camera; }
@@ -71,6 +85,12 @@ public:
     
     // Export viewport content to PNG (scene only, no grid, no gizmo). Returns true on success.
     bool exportToPng(const std::string& path, Scene* scene);
+
+    // Export viewport content to JPEG. quality: 1-100. Returns true on success.
+    bool exportToJpg(const std::string& path, Scene* scene, int quality = 90);
+
+    // Export viewport content to a single-page PDF (JPEG-compressed). Returns true on success.
+    bool exportToPdf(const std::string& path, Scene* scene);
     
     // Explicit cleanup method (call before destroying OpenGL context)
     void cleanup();
@@ -84,7 +104,9 @@ private:
     GLuint renderbufferId = 0;
     
     Camera camera;
+    SceneStyle* style = nullptr;
     Shader gridShader;
+    Shader materialShader;
     Gizmo* gizmo = nullptr;
     
     // Grid rendering
@@ -103,11 +125,51 @@ private:
 
     // Reusable buffer for beam rendering
     CachedMesh beamBuffer;
+    CachedMesh gaussianBuffer;
+
+    // Gradient background
+    Shader gradientShader;
+
+    // HDRI environment map
+    GLuint hdriTexture = 0;
+    std::string loadedHdriPath;
+    void loadHdriTexture(const std::string& path);
+    void destroyHdriTexture();
+
+    // Bloom (Presentation mode)
+    GLuint bloomFBO[2] = {0, 0};
+    GLuint bloomTexture[2] = {0, 0};
+    Shader bloomExtractShader;
+    Shader bloomBlurShader;
+    Shader bloomCompositeShader;
+    GLuint fullscreenVAO = 0;
+    GLuint fullscreenVBO = 0;
+    bool bloomInitialized = false;
 
     void createFramebuffer();
     void destroyFramebuffer();
     void initGrid();
     void initPrototypeGeometry();
+    void initFullscreenQuad();
+    void initBloom();
+    void destroyBloom();
+
+    // Thumbnail rendering for library panel
+    static constexpr int kThumbnailSize = 128;
+    GLuint thumbnailFBO = 0;
+    GLuint thumbnailDepthRBO = 0;
+    GLuint thumbnailTextures[kMaxPrototypes] = {};
+    bool thumbnailsGenerated = false;
+    void destroyThumbnails();
+
+public:
+    // Render bloom post-process pass (call after endFrame in Presentation mode)
+    void renderBloomPass();
+
+    // Generate 3D thumbnail previews for all built-in element types
+    void generateThumbnails();
+    GLuint getThumbnailTexture(int typeIndex) const;
+    bool hasThumbnails() const { return thumbnailsGenerated; }
 };
 
 } // namespace opticsketch

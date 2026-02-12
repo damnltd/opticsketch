@@ -2,7 +2,12 @@
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/basic_elements.h"
+#include "elements/annotation.h"
 #include "render/beam.h"
+#include "elements/measurement.h"
+#include "style/scene_style.h"
+#include "camera/camera.h"
+#include "scene/group.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <fstream>
@@ -27,6 +32,31 @@ static void trim(std::string& s) {
     s.erase(s.begin(), it);
     it = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) { return std::isspace(c); }).base();
     s.erase(it, s.end());
+}
+
+// Encode text for single-line storage (newlines become literal \n)
+static std::string encodeText(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '\n') out += "\\n";
+        else if (c == '\\') out += "\\\\";
+        else out += c;
+    }
+    return out;
+}
+
+static std::string decodeText(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            if (s[i+1] == 'n') { out += '\n'; i++; }
+            else if (s[i+1] == '\\') { out += '\\'; i++; }
+            else out += s[i];
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
 }
 
 namespace opticsketch {
@@ -68,7 +98,7 @@ static ElementType stringToType(const std::string& s) {
     return ElementType::Laser;
 }
 
-bool saveProject(const std::string& path, Scene* scene) {
+bool saveProject(const std::string& path, Scene* scene, SceneStyle* style) {
     if (!scene) return false;
     std::ofstream f(path);
     if (!f) return false;
@@ -88,6 +118,18 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "locked " << (e.locked ? 1 : 0) << "\n";
         f << "showlabel " << (e.showLabel ? 1 : 0) << "\n";
         f << "layer " << e.layer << "\n";
+        // Optical properties
+        f << "opticaltype " << static_cast<int>(e.optics.opticalType) << "\n";
+        f << "ior " << e.optics.ior << "\n";
+        f << "reflectivity " << e.optics.reflectivity << "\n";
+        f << "transmissivity " << e.optics.transmissivity << "\n";
+        f << "focallength " << e.optics.focalLength << "\n";
+        f << "curvature " << e.optics.curvatureR1 << " " << e.optics.curvatureR2 << "\n";
+        // Material properties
+        f << "metallic " << e.material.metallic << "\n";
+        f << "roughness " << e.material.roughness << "\n";
+        f << "transparency " << e.material.transparency << "\n";
+        f << "fresnelior " << e.material.fresnelIOR << "\n";
         if (e.type == ElementType::ImportedMesh && !e.meshSourcePath.empty()) {
             f << "meshpath " << e.meshSourcePath << "\n";
         }
@@ -106,6 +148,105 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "width " << b.width << "\n";
         f << "visible " << (b.visible ? 1 : 0) << "\n";
         f << "layer " << b.layer << "\n";
+        if (b.isTraced) {
+            f << "traced 1\n";
+            f << "sourceid " << b.sourceElementId << "\n";
+        }
+        if (b.isGaussian) {
+            f << "gaussian 1\n";
+            f << "waist " << b.waistW0 << "\n";
+            f << "wavelength " << b.wavelength << "\n";
+            f << "waistpos " << b.waistPosition << "\n";
+        }
+        f << "end\n";
+    }
+    // Save annotations
+    for (const auto& ann : scene->getAnnotations()) {
+        if (!ann) continue;
+        const Annotation& a = *ann;
+        f << "annotation\n";
+        f << "id " << a.id << "\n";
+        f << "label " << a.label << "\n";
+        f << "text " << encodeText(a.text) << "\n";
+        f << "position " << a.position.x << " " << a.position.y << " " << a.position.z << "\n";
+        f << "color " << a.color.x << " " << a.color.y << " " << a.color.z << "\n";
+        f << "fontsize " << a.fontSize << "\n";
+        f << "visible " << (a.visible ? 1 : 0) << "\n";
+        f << "layer " << a.layer << "\n";
+        f << "end\n";
+    }
+    // Save measurements
+    for (const auto& meas : scene->getMeasurements()) {
+        if (!meas) continue;
+        const Measurement& m = *meas;
+        f << "measurement\n";
+        f << "id " << m.id << "\n";
+        f << "label " << m.label << "\n";
+        f << "start " << m.startPoint.x << " " << m.startPoint.y << " " << m.startPoint.z << "\n";
+        f << "end " << m.endPoint.x << " " << m.endPoint.y << " " << m.endPoint.z << "\n";
+        f << "color " << m.color.x << " " << m.color.y << " " << m.color.z << "\n";
+        f << "fontsize " << m.fontSize << "\n";
+        f << "visible " << (m.visible ? 1 : 0) << "\n";
+        f << "layer " << m.layer << "\n";
+        f << "end\n";
+    }
+    // Save groups
+    for (const auto& g : scene->getGroups()) {
+        f << "group\n";
+        f << "id " << g.id << "\n";
+        f << "name " << g.name << "\n";
+        f << "members";
+        for (const auto& mid : g.memberIds)
+            f << " " << mid;
+        f << "\n";
+        f << "end\n";
+    }
+    // Save style
+    if (style) {
+        f << "style\n";
+        f << "rendermode " << static_cast<int>(style->renderMode) << "\n";
+        f << "bgcolor " << style->bgColor.x << " " << style->bgColor.y << " " << style->bgColor.z << "\n";
+        f << "gridcolor " << style->gridColor.x << " " << style->gridColor.y << " " << style->gridColor.z << "\n";
+        f << "gridalpha " << style->gridAlpha << "\n";
+        f << "wireframecolor " << style->wireframeColor.x << " " << style->wireframeColor.y << " " << style->wireframeColor.z << "\n";
+        f << "selbrightness " << style->selectionBrightness << "\n";
+        f << "ambient " << style->ambientStrength << "\n";
+        f << "specular " << style->specularStrength << "\n";
+        f << "shininess " << style->specularShininess << "\n";
+        for (int i = 0; i < kElementTypeCount; i++) {
+            f << "elemcolor " << i << " " << style->elementColors[i].x << " " << style->elementColors[i].y << " " << style->elementColors[i].z << "\n";
+        }
+        f << "snaptogrid " << (style->snapToGrid ? 1 : 0) << "\n";
+        f << "snapgridspacing " << style->gridSpacing << "\n";
+        f << "snaptoelem " << (style->snapToElement ? 1 : 0) << "\n";
+        f << "snapelemradius " << style->elementSnapRadius << "\n";
+        f << "showfocalpoints " << (style->showFocalPoints ? 1 : 0) << "\n";
+        f << "bloomthreshold " << style->bloomThreshold << "\n";
+        f << "bloomintensity " << style->bloomIntensity << "\n";
+        f << "bloomblurpasses " << style->bloomBlurPasses << "\n";
+        f << "bgmode " << static_cast<int>(style->bgMode) << "\n";
+        f << "bggradtop " << style->bgGradientTop.x << " " << style->bgGradientTop.y << " " << style->bgGradientTop.z << "\n";
+        f << "bggradbot " << style->bgGradientBottom.x << " " << style->bgGradientBottom.y << " " << style->bgGradientBottom.z << "\n";
+        if (!style->hdriPath.empty()) {
+            f << "hdripath " << style->hdriPath << "\n";
+        }
+        f << "hdriintensity " << style->hdriIntensity << "\n";
+        f << "hdrirotation " << style->hdriRotation << "\n";
+        f << "end\n";
+    }
+    // Save view presets
+    for (const auto& vp : scene->getViewPresets()) {
+        f << "viewpreset\n";
+        f << "name " << vp.name << "\n";
+        f << "mode " << static_cast<int>(vp.mode) << "\n";
+        f << "position " << vp.position.x << " " << vp.position.y << " " << vp.position.z << "\n";
+        f << "target " << vp.target.x << " " << vp.target.y << " " << vp.target.z << "\n";
+        f << "up " << vp.up.x << " " << vp.up.y << " " << vp.up.z << "\n";
+        f << "fov " << vp.fov << "\n";
+        f << "orthosize " << vp.orthoSize << "\n";
+        f << "distance " << vp.distance << "\n";
+        f << "azimuth " << vp.azimuth << "\n";
+        f << "elevation " << vp.elevation << "\n";
         f << "end\n";
     }
     f.flush();
@@ -118,6 +259,13 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     float qx = 0, qy = 0, qz = 0, qw = 1;
     float sx = 1, sy = 1, sz = 1;
     int visible = 1, locked = 0, showlabel = 1, layer = 0;
+    // Optical properties
+    int opticaltype = -1;  // -1 means not specified (use factory defaults)
+    float ior = -1, reflectivity = -1, transmissivity = -1;
+    float focallength = -1, curvR1 = 0, curvR2 = 0;
+    bool hasCurvature = false;
+    // Material properties
+    float metallic = -1, roughness = -1, transparency = -1, fresnelior = -1;
 
     std::string line;
     while (std::getline(in, line)) {
@@ -154,6 +302,28 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
         } else if (line.compare(0, 9, "meshpath ") == 0) {
             meshpath = line.substr(9);
             trim(meshpath);
+        } else if (line.compare(0, 12, "opticaltype ") == 0) {
+            opticaltype = std::stoi(line.substr(12));
+        } else if (line.compare(0, 4, "ior ") == 0) {
+            ior = std::stof(line.substr(4));
+        } else if (line.compare(0, 14, "reflectivity ") == 0) {
+            reflectivity = std::stof(line.substr(14));
+        } else if (line.compare(0, 15, "transmissivity ") == 0) {
+            transmissivity = std::stof(line.substr(15));
+        } else if (line.compare(0, 12, "focallength ") == 0) {
+            focallength = std::stof(line.substr(12));
+        } else if (line.compare(0, 10, "curvature ") == 0) {
+            std::istringstream ls(line.substr(10));
+            ls >> curvR1 >> curvR2;
+            hasCurvature = true;
+        } else if (line.compare(0, 9, "metallic ") == 0) {
+            metallic = std::stof(line.substr(9));
+        } else if (line.compare(0, 10, "roughness ") == 0) {
+            roughness = std::stof(line.substr(10));
+        } else if (line.compare(0, 13, "transparency ") == 0) {
+            transparency = std::stof(line.substr(13));
+        } else if (line.compare(0, 10, "fresnelior ") == 0) {
+            fresnelior = std::stof(line.substr(10));
         }
     }
 
@@ -175,6 +345,21 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     elem->showLabel = (showlabel != 0);
     elem->layer = layer;
 
+    // Override optical properties if specified in file
+    if (opticaltype >= 0 && opticaltype <= 7)
+        elem->optics.opticalType = static_cast<OpticalType>(opticaltype);
+    if (ior >= 0) elem->optics.ior = ior;
+    if (reflectivity >= 0) elem->optics.reflectivity = reflectivity;
+    if (transmissivity >= 0) elem->optics.transmissivity = transmissivity;
+    if (focallength >= 0) elem->optics.focalLength = focallength;
+    if (hasCurvature) { elem->optics.curvatureR1 = curvR1; elem->optics.curvatureR2 = curvR2; }
+
+    // Override material properties if specified
+    if (metallic >= 0) elem->material.metallic = metallic;
+    if (roughness >= 0) elem->material.roughness = roughness;
+    if (transparency >= 0) elem->material.transparency = transparency;
+    if (fresnelior >= 0) elem->material.fresnelIOR = fresnelior;
+
     scene->addElement(std::move(elem));
     return true;
 }
@@ -186,6 +371,10 @@ static bool parseBeamBlock(std::istream& in, Scene* scene) {
     float cr = 1.0f, cg = 0.2f, cb = 0.2f;
     float width = 2.0f;
     int visible = 1, layer = 0;
+    int traced = 0;
+    std::string sourceid;
+    int gaussian = 0;
+    float waist = 0.001f, wl = 633e-9f, waistpos = 0.0f;
 
     std::string line;
     while (std::getline(in, line)) {
@@ -214,6 +403,19 @@ static bool parseBeamBlock(std::istream& in, Scene* scene) {
             visible = std::stoi(line.substr(8));
         } else if (line.compare(0, 6, "layer ") == 0) {
             layer = std::stoi(line.substr(6));
+        } else if (line.compare(0, 7, "traced ") == 0) {
+            traced = std::stoi(line.substr(7));
+        } else if (line.compare(0, 9, "sourceid ") == 0) {
+            sourceid = line.substr(9);
+            trim(sourceid);
+        } else if (line.compare(0, 9, "gaussian ") == 0) {
+            gaussian = std::stoi(line.substr(9));
+        } else if (line.compare(0, 6, "waist ") == 0) {
+            waist = std::stof(line.substr(6));
+        } else if (line.compare(0, 11, "wavelength ") == 0) {
+            wl = std::stof(line.substr(11));
+        } else if (line.compare(0, 9, "waistpos ") == 0) {
+            waistpos = std::stof(line.substr(9));
         }
     }
 
@@ -225,12 +427,264 @@ static bool parseBeamBlock(std::istream& in, Scene* scene) {
     beam->width = width;
     beam->visible = (visible != 0);
     beam->layer = layer;
+    beam->isTraced = (traced != 0);
+    beam->sourceElementId = sourceid;
+    beam->isGaussian = (gaussian != 0);
+    beam->waistW0 = waist;
+    beam->wavelength = wl;
+    beam->waistPosition = waistpos;
 
     scene->addBeam(std::move(beam));
     return true;
 }
 
-bool loadProject(const std::string& path, Scene* scene) {
+static bool parseAnnotationBlock(std::istream& in, Scene* scene) {
+    std::string id, label, text;
+    float px = 0, py = 0, pz = 0;
+    float cr = 0.95f, cg = 0.95f, cb = 0.85f;
+    float fontSize = 14.0f;
+    int visible = 1, layer = 0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 3, "id ") == 0) {
+            id = line.substr(3);
+            trim(id);
+        } else if (line.compare(0, 6, "label ") == 0) {
+            label = line.substr(6);
+            trim(label);
+        } else if (line.compare(0, 5, "text ") == 0) {
+            text = decodeText(line.substr(5));
+        } else if (line.compare(0, 9, "position ") == 0) {
+            std::istringstream ls(line.substr(9));
+            ls >> px >> py >> pz;
+        } else if (line.compare(0, 6, "color ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> cr >> cg >> cb;
+        } else if (line.compare(0, 9, "fontsize ") == 0) {
+            fontSize = std::stof(line.substr(9));
+        } else if (line.compare(0, 8, "visible ") == 0) {
+            visible = std::stoi(line.substr(8));
+        } else if (line.compare(0, 6, "layer ") == 0) {
+            layer = std::stoi(line.substr(6));
+        }
+    }
+
+    auto ann = std::make_unique<Annotation>(id.empty() ? Annotation::generateId() : id);
+    ann->label = label;
+    ann->text = text;
+    ann->position = glm::vec3(px, py, pz);
+    ann->color = glm::vec3(cr, cg, cb);
+    ann->fontSize = fontSize;
+    ann->visible = (visible != 0);
+    ann->layer = layer;
+
+    scene->addAnnotation(std::move(ann));
+    return true;
+}
+
+static bool parseStyleBlock(std::istream& in, SceneStyle* style) {
+    if (!style) {
+        // Skip the block if no style pointer
+        std::string line;
+        while (std::getline(in, line)) {
+            trim(line);
+            if (line == "end") break;
+        }
+        return true;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 8, "bgcolor ") == 0) {
+            std::istringstream ls(line.substr(8));
+            ls >> style->bgColor.x >> style->bgColor.y >> style->bgColor.z;
+        } else if (line.compare(0, 10, "gridcolor ") == 0) {
+            std::istringstream ls(line.substr(10));
+            ls >> style->gridColor.x >> style->gridColor.y >> style->gridColor.z;
+        } else if (line.compare(0, 10, "gridalpha ") == 0) {
+            style->gridAlpha = std::stof(line.substr(10));
+        } else if (line.compare(0, 15, "wireframecolor ") == 0) {
+            std::istringstream ls(line.substr(15));
+            ls >> style->wireframeColor.x >> style->wireframeColor.y >> style->wireframeColor.z;
+        } else if (line.compare(0, 14, "selbrightness ") == 0) {
+            style->selectionBrightness = std::stof(line.substr(14));
+        } else if (line.compare(0, 8, "ambient ") == 0) {
+            style->ambientStrength = std::stof(line.substr(8));
+        } else if (line.compare(0, 9, "specular ") == 0) {
+            style->specularStrength = std::stof(line.substr(9));
+        } else if (line.compare(0, 10, "shininess ") == 0) {
+            style->specularShininess = std::stof(line.substr(10));
+        } else if (line.compare(0, 10, "elemcolor ") == 0) {
+            std::istringstream ls(line.substr(10));
+            int idx;
+            float r, g, b;
+            ls >> idx >> r >> g >> b;
+            if (idx >= 0 && idx < kElementTypeCount) {
+                style->elementColors[idx] = glm::vec3(r, g, b);
+            }
+        } else if (line.compare(0, 11, "snaptogrid ") == 0) {
+            style->snapToGrid = (std::stoi(line.substr(11)) != 0);
+        } else if (line.compare(0, 16, "snapgridspacing ") == 0) {
+            style->gridSpacing = std::stof(line.substr(16));
+        } else if (line.compare(0, 11, "snaptoelem ") == 0) {
+            style->snapToElement = (std::stoi(line.substr(11)) != 0);
+        } else if (line.compare(0, 15, "snapelemradius ") == 0) {
+            style->elementSnapRadius = std::stof(line.substr(15));
+        } else if (line.compare(0, 11, "rendermode ") == 0) {
+            int rm = std::stoi(line.substr(11));
+            if (rm >= 0 && rm <= 2) style->renderMode = static_cast<RenderMode>(rm);
+        } else if (line.compare(0, 16, "showfocalpoints ") == 0) {
+            style->showFocalPoints = (std::stoi(line.substr(16)) != 0);
+        } else if (line.compare(0, 15, "bloomthreshold ") == 0) {
+            style->bloomThreshold = std::stof(line.substr(15));
+        } else if (line.compare(0, 15, "bloomintensity ") == 0) {
+            style->bloomIntensity = std::stof(line.substr(15));
+        } else if (line.compare(0, 16, "bloomblurpasses ") == 0) {
+            style->bloomBlurPasses = std::stoi(line.substr(16));
+        } else if (line.compare(0, 7, "bgmode ") == 0) {
+            int m = std::stoi(line.substr(7));
+            if (m >= 0 && m <= 1) style->bgMode = static_cast<BackgroundMode>(m);
+        } else if (line.compare(0, 10, "bggradtop ") == 0) {
+            std::istringstream ls(line.substr(10));
+            ls >> style->bgGradientTop.x >> style->bgGradientTop.y >> style->bgGradientTop.z;
+        } else if (line.compare(0, 10, "bggradbot ") == 0) {
+            std::istringstream ls(line.substr(10));
+            ls >> style->bgGradientBottom.x >> style->bgGradientBottom.y >> style->bgGradientBottom.z;
+        } else if (line.compare(0, 9, "hdripath ") == 0) {
+            style->hdriPath = line.substr(9);
+            // Trim whitespace
+            while (!style->hdriPath.empty() && (style->hdriPath.back() == ' ' || style->hdriPath.back() == '\r'))
+                style->hdriPath.pop_back();
+        } else if (line.compare(0, 14, "hdriintensity ") == 0) {
+            style->hdriIntensity = std::stof(line.substr(14));
+        } else if (line.compare(0, 13, "hdrirotation ") == 0) {
+            style->hdriRotation = std::stof(line.substr(13));
+        }
+    }
+    return true;
+}
+
+static bool parseGroupBlock(std::istream& in, Scene* scene) {
+    Group g;
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 3, "id ") == 0) {
+            g.id = line.substr(3); trim(g.id);
+        } else if (line.compare(0, 5, "name ") == 0) {
+            g.name = line.substr(5); trim(g.name);
+        } else if (line.compare(0, 7, "members") == 0) {
+            std::istringstream ls(line.substr(7));
+            std::string mid;
+            while (ls >> mid)
+                g.memberIds.push_back(mid);
+        }
+    }
+    if (g.id.empty()) g.id = Group::generateId();
+    scene->addGroup(g);
+    return true;
+}
+
+static bool parseMeasurementBlock(std::istream& in, Scene* scene) {
+    std::string id, label;
+    float sx = 0, sy = 0, sz = 0;
+    float ex = 0, ey = 0, ez = 0;
+    float cr = 0.9f, cg = 0.9f, cb = 0.3f;
+    float fontSize = 12.0f;
+    int visible = 1, layer = 0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 3, "id ") == 0) {
+            id = line.substr(3); trim(id);
+        } else if (line.compare(0, 6, "label ") == 0) {
+            label = line.substr(6); trim(label);
+        } else if (line.compare(0, 6, "start ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> sx >> sy >> sz;
+        } else if (line.compare(0, 4, "end ") == 0 && line.length() > 4) {
+            std::istringstream ls(line.substr(4));
+            ls >> ex >> ey >> ez;
+        } else if (line.compare(0, 6, "color ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> cr >> cg >> cb;
+        } else if (line.compare(0, 9, "fontsize ") == 0) {
+            fontSize = std::stof(line.substr(9));
+        } else if (line.compare(0, 8, "visible ") == 0) {
+            visible = std::stoi(line.substr(8));
+        } else if (line.compare(0, 6, "layer ") == 0) {
+            layer = std::stoi(line.substr(6));
+        }
+    }
+
+    auto meas = std::make_unique<Measurement>(id.empty() ? Measurement::generateId() : id);
+    meas->label = label;
+    meas->startPoint = glm::vec3(sx, sy, sz);
+    meas->endPoint = glm::vec3(ex, ey, ez);
+    meas->color = glm::vec3(cr, cg, cb);
+    meas->fontSize = fontSize;
+    meas->visible = (visible != 0);
+    meas->layer = layer;
+
+    scene->addMeasurement(std::move(meas));
+    return true;
+}
+
+static bool parseViewPresetBlock(std::istream& in, Scene* scene) {
+    ViewPreset vp;
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 5, "name ") == 0) {
+            vp.name = line.substr(5);
+            trim(vp.name);
+        } else if (line.compare(0, 5, "mode ") == 0) {
+            vp.mode = static_cast<CameraMode>(std::stoi(line.substr(5)));
+        } else if (line.compare(0, 9, "position ") == 0) {
+            std::istringstream ls(line.substr(9));
+            ls >> vp.position.x >> vp.position.y >> vp.position.z;
+        } else if (line.compare(0, 7, "target ") == 0) {
+            std::istringstream ls(line.substr(7));
+            ls >> vp.target.x >> vp.target.y >> vp.target.z;
+        } else if (line.compare(0, 3, "up ") == 0) {
+            std::istringstream ls(line.substr(3));
+            ls >> vp.up.x >> vp.up.y >> vp.up.z;
+        } else if (line.compare(0, 4, "fov ") == 0) {
+            vp.fov = std::stof(line.substr(4));
+        } else if (line.compare(0, 10, "orthosize ") == 0) {
+            vp.orthoSize = std::stof(line.substr(10));
+        } else if (line.compare(0, 9, "distance ") == 0) {
+            vp.distance = std::stof(line.substr(9));
+        } else if (line.compare(0, 8, "azimuth ") == 0) {
+            vp.azimuth = std::stof(line.substr(8));
+        } else if (line.compare(0, 10, "elevation ") == 0) {
+            vp.elevation = std::stof(line.substr(10));
+        }
+    }
+    scene->addViewPreset(vp);
+    return true;
+}
+
+bool loadProject(const std::string& path, Scene* scene, SceneStyle* style) {
     if (!scene) return false;
     std::ifstream f(path);
     if (!f) return false;
@@ -250,6 +704,16 @@ bool loadProject(const std::string& path, Scene* scene) {
             if (!parseElementBlock(f, scene)) return false;
         } else if (line == "beam") {
             if (!parseBeamBlock(f, scene)) return false;
+        } else if (line == "annotation") {
+            if (!parseAnnotationBlock(f, scene)) return false;
+        } else if (line == "measurement") {
+            if (!parseMeasurementBlock(f, scene)) return false;
+        } else if (line == "group") {
+            if (!parseGroupBlock(f, scene)) return false;
+        } else if (line == "style") {
+            if (!parseStyleBlock(f, style)) return false;
+        } else if (line == "viewpreset") {
+            if (!parseViewPresetBlock(f, scene)) return false;
         }
     }
     return true;

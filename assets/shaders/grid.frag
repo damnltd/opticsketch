@@ -8,8 +8,18 @@ uniform vec3 uColor;
 uniform float uAlpha;
 uniform vec3 uLightPos;
 uniform vec3 uViewPos;
+uniform float uAmbientStrength = 0.14;
+uniform float uSpecularStrength = 0.55;
+uniform float uShininess = 48.0;
+uniform float uEmissive = 0.0;
 
 void main() {
+    // Emissive path: bypass lighting and tonemapping (for beams, focal points, etc.)
+    if (uEmissive > 0.5) {
+        FragColor = vec4(uColor, uAlpha);
+        return;
+    }
+
     vec3 norm = normalize(Normal);
     vec3 viewDir = normalize(uViewPos - FragPos);
 
@@ -23,15 +33,13 @@ void main() {
     float fillDiff = max(dot(norm, fillDir), 0.0);
     vec3 fillLight = fillDiff * vec3(0.4, 0.45, 0.5);
 
-    // Ambient - kept low so shading is visible
-    float ambientStrength = 0.14;
-    vec3 ambient = ambientStrength * vec3(1.0, 1.0, 1.0);
+    // Ambient
+    vec3 ambient = uAmbientStrength * vec3(1.0, 1.0, 1.0);
 
     // Specular (Blinn-Phong - half vector gives nicer highlights)
     vec3 halfDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(norm, halfDir), 0.0), 48.0);
-    float specularStrength = 0.55;
-    vec3 specular = specularStrength * spec * vec3(1.0, 1.0, 1.0);
+    float spec = pow(max(dot(norm, halfDir), 0.0), uShininess);
+    vec3 specular = uSpecularStrength * spec * vec3(1.0, 1.0, 1.0);
 
     vec3 result = (ambient + diffuse + fillLight + specular) * uColor;
     // Soft clamp so we don't blow out

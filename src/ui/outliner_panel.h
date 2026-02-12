@@ -6,7 +6,8 @@ namespace opticsketch {
 
 class Scene;
 
-// Maya/Blender-style outliner: flat list of scene objects. Click to select.
+// Maya/Blender-style outliner: flat list of scene objects with multi-select.
+// Click = single select, Ctrl+Click = toggle, Shift+Click = range select.
 class OutlinerPanel {
 public:
     OutlinerPanel() = default;
@@ -18,6 +19,7 @@ public:
 
 private:
     bool visible = true;
+    int lastClickedIndex = -1;  // flat index for Shift+click range selection
 };
 
 } // namespace opticsketch

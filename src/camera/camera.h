@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
+#include <vector>
 
 namespace opticsketch {
 
@@ -10,6 +11,19 @@ enum class CameraMode {
     TopDown2D,      // Fixed orthographic top-down, no depth
     Orthographic3D, // Rotatable, no perspective distortion
     Perspective3D    // Full camera control, depth perception
+};
+
+struct ViewPreset {
+    std::string name;
+    CameraMode mode = CameraMode::Perspective3D;
+    glm::vec3 position{0.0f, 5.0f, 10.0f};
+    glm::vec3 target{0.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
+    float fov = 45.0f;
+    float orthoSize = 10.0f;
+    float distance = 10.0f;
+    float azimuth = 0.0f;
+    float elevation = 0.5f;
 };
 
 class Camera {
@@ -54,7 +68,16 @@ public:
 
     // Frame camera on a point with given bounding radius
     void frameOn(const glm::vec3& center, float boundsRadius);
-    
+
+    // View preset capture/apply
+    ViewPreset captureState(const std::string& name) const;
+    void applyPreset(const ViewPreset& preset);
+
+    // Getters for private state
+    float getDistance() const { return distance; }
+    float getAzimuth() const { return azimuth; }
+    float getElevation() const { return elevation; }
+
 private:
     float distance = 10.0f;  // Distance from target
     float azimuth = 0.0f;    // Horizontal angle (radians)

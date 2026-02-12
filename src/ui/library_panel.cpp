@@ -11,6 +11,12 @@ LibraryPanel::LibraryPanel() {
     loadBuiltinLibrary();
 }
 
+void LibraryPanel::setThumbnailTexture(int typeIndex, GLuint texId) {
+    if (typeIndex >= 0 && typeIndex < 14) {
+        thumbnailTextures[typeIndex] = texId;
+    }
+}
+
 void LibraryPanel::loadBuiltinLibrary() {
     items = {
         // Sources
@@ -62,24 +68,20 @@ void LibraryPanel::render() {
         return;
     }
     
-    // Category filter - compact dropdown
+    // Category filter - tabs
     const char* categories[] = {"All", "Sources", "Mirrors", "Lenses", "Beam Splitters", "Filters", "Apertures", "Prisms", "Detectors", "Fiber", "Mounts", "Imported"};
     const int numCategories = 12;
 
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::BeginCombo("##Category", selectedCategory.c_str())) {
+    if (ImGui::BeginTabBar("##CategoryTabs", ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton)) {
         for (int i = 0; i < numCategories; i++) {
-            bool isSelected = (selectedCategory == categories[i]);
-            if (ImGui::Selectable(categories[i], isSelected)) {
+            if (ImGui::BeginTabItem(categories[i])) {
                 selectedCategory = categories[i];
+                ImGui::EndTabItem();
             }
-            if (isSelected) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ImGui::EndTabBar();
     }
-    
-    ImGui::Spacing();
-    ImGui::Separator();
+
     ImGui::Spacing();
     
     // Search bar - full width
@@ -258,15 +260,25 @@ void LibraryPanel::renderElementItem(const LibraryItem& item) {
     // Content overlay (drawn via drawList, no cursor reset needed)
     ImGui::PushClipRect(screenPos, ImVec2(screenPos.x + cardSize.x, screenPos.y + cardSize.y), true);
     
-    // Icon - centered at top
-    ImVec2 iconTextSize = ImGui::CalcTextSize(icon);
-    ImVec2 iconPos(screenPos.x + (cardSize.x - iconTextSize.x) * 0.5f, 
-                  screenPos.y + cardSize.y * 0.25f - iconTextSize.y * 0.5f);
-    drawList->AddText(iconPos, ImGui::ColorConvertFloat4ToU32(borderColor), icon);
+    // Thumbnail or fallback icon - centered at top
+    int typeIdx = static_cast<int>(item.type);
+    GLuint thumbTex = (typeIdx >= 0 && typeIdx < 14) ? thumbnailTextures[typeIdx] : 0;
+    if (thumbTex != 0) {
+        float thumbSize = cardSize.y * 0.5f;
+        ImVec2 thumbMin(screenPos.x + (cardSize.x - thumbSize) * 0.5f,
+                        screenPos.y + cardSize.y * 0.05f);
+        ImVec2 thumbMax(thumbMin.x + thumbSize, thumbMin.y + thumbSize);
+        drawList->AddImage((ImTextureID)(intptr_t)thumbTex, thumbMin, thumbMax);
+    } else {
+        ImVec2 iconTextSize = ImGui::CalcTextSize(icon);
+        ImVec2 iconPos(screenPos.x + (cardSize.x - iconTextSize.x) * 0.5f,
+                      screenPos.y + cardSize.y * 0.25f - iconTextSize.y * 0.5f);
+        drawList->AddText(iconPos, ImGui::ColorConvertFloat4ToU32(borderColor), icon);
+    }
     
-    // Name - centered at bottom
+    // Name - centered at bottom (lower when thumbnail is shown)
     ImVec2 nameTextSize = ImGui::CalcTextSize(item.name.c_str());
-    float nameY = screenPos.y + cardSize.y * 0.75f;
+    float nameY = screenPos.y + cardSize.y * (thumbTex ? 0.78f : 0.75f);
     ImVec2 namePos(screenPos.x + (cardSize.x - nameTextSize.x) * 0.5f, nameY);
     
     // Truncate name if too long

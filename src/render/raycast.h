@@ -22,8 +22,12 @@ public:
                           int viewportWidth, int viewportHeight);
     
     // Test ray against axis-aligned bounding box
-    static bool intersectAABB(const Ray& ray, const glm::vec3& min, const glm::vec3& max, 
+    static bool intersectAABB(const Ray& ray, const glm::vec3& min, const glm::vec3& max,
                              float& t);
+
+    // Test ray against AABB and return the hit face normal
+    static bool intersectAABBWithNormal(const Ray& ray, const glm::vec3& min, const glm::vec3& max,
+                                        float& t, glm::vec3& faceNormal);
     
     // Test ray against element bounds
     static bool intersectElement(const Ray& ray, const Element* element, 

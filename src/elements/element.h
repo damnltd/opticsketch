@@ -25,6 +25,25 @@ enum class ElementType {
     ImportedMesh
 };
 
+enum class OpticalType { Source, Mirror, Lens, Splitter, Absorber, Prism, Grating, Passive };
+
+struct OpticalProperties {
+    OpticalType opticalType = OpticalType::Passive;
+    float ior = 1.5f;               // index of refraction
+    float reflectivity = 0.0f;      // 0..1
+    float transmissivity = 1.0f;    // 0..1
+    float focalLength = 50.0f;      // mm
+    float curvatureR1 = 100.0f;     // mm (front surface)
+    float curvatureR2 = -100.0f;    // mm (back surface)
+};
+
+struct MaterialProperties {
+    float metallic = 0.0f;
+    float roughness = 0.5f;
+    float transparency = 0.0f;
+    float fresnelIOR = 1.5f;
+};
+
 struct Transform {
     glm::vec3 position{0.0f};
     glm::quat rotation{glm::identity<glm::quat>()};
@@ -60,6 +79,12 @@ public:
     // Bounds (for selection and rendering)
     glm::vec3 boundsMin{-1.0f};
     glm::vec3 boundsMax{1.0f};
+
+    // Optical properties
+    OpticalProperties optics;
+
+    // Material properties (for Presentation mode rendering)
+    MaterialProperties material;
 
     // Mesh data (for ImportedMesh type only)
     std::vector<float> meshVertices;    // 6 floats per vertex (pos + normal)

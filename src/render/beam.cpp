@@ -31,7 +31,29 @@ std::unique_ptr<Beam> Beam::clone() const {
     b->width = width;
     b->visible = visible;
     b->layer = layer;
+    b->isTraced = isTraced;
+    b->sourceElementId = sourceElementId;
+    b->isGaussian = isGaussian;
+    b->waistW0 = waistW0;
+    b->wavelength = wavelength;
+    b->waistPosition = waistPosition;
     return b;
+}
+
+float Beam::getRayleighRange() const {
+    if (wavelength < 1e-15f) return 0.0f;
+    return 3.14159265f * waistW0 * waistW0 / wavelength;
+}
+
+float Beam::getDivergenceAngle() const {
+    if (waistW0 < 1e-15f) return 0.0f;
+    return wavelength / (3.14159265f * waistW0);
+}
+
+float Beam::beamRadiusAt(float z) const {
+    float zR = getRayleighRange();
+    if (zR < 1e-15f) return waistW0;
+    return waistW0 * std::sqrt(1.0f + (z / zR) * (z / zR));
 }
 
 std::string Beam::generateId() {

@@ -52,6 +52,41 @@ bool Raycast::intersectAABB(const Ray& ray, const glm::vec3& min, const glm::vec
     return true;
 }
 
+bool Raycast::intersectAABBWithNormal(const Ray& ray, const glm::vec3& min, const glm::vec3& max,
+                                      float& t, glm::vec3& faceNormal) {
+    glm::vec3 invDir = 1.0f / ray.direction;
+    glm::vec3 t1 = (min - ray.origin) * invDir;
+    glm::vec3 t2 = (max - ray.origin) * invDir;
+
+    glm::vec3 tMin = glm::min(t1, t2);
+    glm::vec3 tMax = glm::max(t1, t2);
+
+    float tNear = std::max(std::max(tMin.x, tMin.y), tMin.z);
+    float tFar = std::min(std::min(tMax.x, tMax.y), tMax.z);
+
+    if (tNear > tFar || tFar < 0.0f) {
+        return false;
+    }
+
+    t = (tNear > 0.0f) ? tNear : tFar;
+
+    // Determine which face was hit based on which component produced tNear/tFar
+    float hitT = t;
+    faceNormal = glm::vec3(0.0f);
+    if (hitT == tNear) {
+        if (tNear == tMin.x) faceNormal = glm::vec3(ray.direction.x > 0 ? -1.0f : 1.0f, 0, 0);
+        else if (tNear == tMin.y) faceNormal = glm::vec3(0, ray.direction.y > 0 ? -1.0f : 1.0f, 0);
+        else faceNormal = glm::vec3(0, 0, ray.direction.z > 0 ? -1.0f : 1.0f);
+    } else {
+        // Hit from inside (tNear < 0, using tFar)
+        if (hitT == tMax.x) faceNormal = glm::vec3(ray.direction.x > 0 ? 1.0f : -1.0f, 0, 0);
+        else if (hitT == tMax.y) faceNormal = glm::vec3(0, ray.direction.y > 0 ? 1.0f : -1.0f, 0);
+        else faceNormal = glm::vec3(0, 0, ray.direction.z > 0 ? 1.0f : -1.0f);
+    }
+
+    return true;
+}
+
 bool Raycast::intersectElement(const Ray& ray, const Element* element,
                                glm::mat4 transform, float& t) {
     if (!element) return false;
