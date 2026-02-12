@@ -440,6 +440,9 @@ static void deleteCachedMesh(CachedMesh& mesh) {
 }
 
 void Viewport::renderGrid(float spacing, int gridSize) {
+    // Suppress grid in Schematic mode (clean white background)
+    if (style && style->renderMode == RenderMode::Schematic) return;
+
     if (!gridInitialized) {
         initGrid();
     }
@@ -1613,7 +1616,7 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
         glm::vec3 wireColor = style ? style->wireframeColor : glm::vec3(0.2f, 1.0f, 0.2f);
         if (isSchematic && !forExport && elem->type != ElementType::ImportedMesh) {
             drawWireframe = true;
-            wireColor = glm::vec3(0.1f, 0.1f, 0.1f); // dark outlines for schematic
+            wireColor = glm::vec3(0.0f, 0.0f, 0.0f); // pure black outlines for schematic
         } else if (isSelected && !forExport && elem->type != ElementType::ImportedMesh) {
             drawWireframe = true;
         }
@@ -1630,7 +1633,7 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
                 gridShader.setVec3("uLightPos", camera.position);
                 gridShader.setVec3("uViewPos", camera.position);
                 glBindVertexArray(wf.vao);
-                glLineWidth(isSchematic ? 1.8f : 1.4f);
+                glLineWidth(isSchematic ? 2.2f : 1.4f);
                 gridShader.setVec3("uColor", wireColor);
                 gridShader.setFloat("uAlpha", 1.0f);
                 glDrawArrays(GL_LINES, 0, wf.vertexCount);
@@ -2168,6 +2171,67 @@ void Viewport::destroyBloom() {
     if (fullscreenVAO) { glDeleteVertexArrays(1, &fullscreenVAO); fullscreenVAO = 0; }
     if (fullscreenVBO) { glDeleteBuffers(1, &fullscreenVBO); fullscreenVBO = 0; }
     bloomInitialized = false;
+}
+
+void Viewport::renderBeamHighlight(const glm::vec3& beamStart, const glm::vec3& beamEnd,
+                                   const glm::vec3& snapPoint) {
+    gridShader.use();
+    gridShader.setMat4("uView", camera.getViewMatrix());
+    gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+    gridShader.setMat4("uModel", glm::mat4(1.0f));
+    gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
+    gridShader.setVec3("uLightPos", camera.position);
+    gridShader.setVec3("uViewPos", camera.position);
+    gridShader.setFloat("uEmissive", 1.0f);
+
+    // Lazy-init reusable beam buffer
+    if (beamBuffer.vao == 0) {
+        glGenVertexArrays(1, &beamBuffer.vao);
+        glGenBuffers(1, &beamBuffer.vbo);
+        glBindVertexArray(beamBuffer.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+        glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+    }
+
+    glBindVertexArray(beamBuffer.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
+
+    // Draw the beam line in cyan (highlighted)
+    glm::vec3 cyan(0.0f, 1.0f, 1.0f);
+    gridShader.setVec3("uColor", cyan);
+    gridShader.setFloat("uAlpha", 0.8f);
+    glLineWidth(4.0f);
+
+    float lineVerts[12] = {
+        beamStart.x, beamStart.y, beamStart.z, 0.0f, 1.0f, 0.0f,
+        beamEnd.x, beamEnd.y, beamEnd.z, 0.0f, 1.0f, 0.0f
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(lineVerts), lineVerts, GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_LINES, 0, 2);
+
+    // Draw yellow cross at snap point
+    glm::vec3 yellow(1.0f, 1.0f, 0.0f);
+    gridShader.setVec3("uColor", yellow);
+    gridShader.setFloat("uAlpha", 1.0f);
+    glLineWidth(3.0f);
+
+    float crossSize = 2.0f;
+    float crossVerts[24] = {
+        snapPoint.x - crossSize, snapPoint.y, snapPoint.z, 0.0f, 1.0f, 0.0f,
+        snapPoint.x + crossSize, snapPoint.y, snapPoint.z, 0.0f, 1.0f, 0.0f,
+        snapPoint.x, snapPoint.y, snapPoint.z - crossSize, 0.0f, 1.0f, 0.0f,
+        snapPoint.x, snapPoint.y, snapPoint.z + crossSize, 0.0f, 1.0f, 0.0f,
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(crossVerts), crossVerts, GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_LINES, 0, 4);
+
+    glLineWidth(1.0f);
+    glBindVertexArray(0);
+    gridShader.setFloat("uEmissive", 0.0f);
 }
 
 void Viewport::renderBloomPass() {

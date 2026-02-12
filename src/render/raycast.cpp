@@ -153,4 +153,21 @@ float Raycast::rayToSegmentSqDist(const Ray& ray, const glm::vec3& segA, const g
     return glm::dot(diff, diff);
 }
 
+float Raycast::pointToSegmentSqDist(const glm::vec3& P, const glm::vec3& segA, const glm::vec3& segB,
+                                    float& outT, glm::vec3& outClosest) {
+    glm::vec3 AB = segB - segA;
+    float abLenSq = glm::dot(AB, AB);
+    if (abLenSq < 1e-12f) {
+        outT = 0.0f;
+        outClosest = segA;
+        glm::vec3 d = P - segA;
+        return glm::dot(d, d);
+    }
+    float t = glm::dot(P - segA, AB) / abLenSq;
+    outT = std::max(0.0f, std::min(1.0f, t));
+    outClosest = segA + outT * AB;
+    glm::vec3 d = P - outClosest;
+    return glm::dot(d, d);
+}
+
 } // namespace opticsketch

@@ -111,7 +111,12 @@ void StyleEditorPanel::render(SceneStyle* style) {
         ImGui::Checkbox("Snap to Grid", &style->snapToGrid);
         ImGui::DragFloat("Grid Spacing", &style->gridSpacing, 1.0f, 1.0f, 200.0f, "%.0f mm");
         ImGui::Checkbox("Snap to Element", &style->snapToElement);
-        ImGui::DragFloat("Snap Radius", &style->elementSnapRadius, 0.1f, 0.1f, 50.0f, "%.1f");
+        ImGui::DragFloat("Snap Radius##elem", &style->elementSnapRadius, 0.1f, 0.1f, 50.0f, "%.1f");
+        ImGui::Separator();
+        ImGui::Checkbox("Snap to Beam", &style->snapToBeam);
+        ImGui::DragFloat("Snap Radius##beam", &style->beamSnapRadius, 0.1f, 0.1f, 50.0f, "%.1f mm");
+        ImGui::Checkbox("Auto-Orient to Beam", &style->autoOrientToBeam);
+        ImGui::TextDisabled("Auto-orient places element perpendicular to beam");
     }
 
     ImGui::Spacing();

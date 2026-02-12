@@ -38,6 +38,7 @@ private:
         float intensity;
         glm::vec3 color;
         std::string sourceId;
+        float wavelength = 633e-9f;  // meters (default HeNe red)
     };
 
     void traceRay(const TraceRay& ray, Scene* scene, const TraceConfig& config,

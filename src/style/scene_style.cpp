@@ -41,6 +41,9 @@ void SceneStyle::resetToDefaults() {
     gridSpacing = 25.0f;
     snapToElement = false;
     elementSnapRadius = 2.0f;
+    snapToBeam = false;
+    beamSnapRadius = 3.0f;
+    autoOrientToBeam = true;
 
     showFocalPoints = true;
     bloomThreshold = 0.8f;

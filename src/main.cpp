@@ -35,6 +35,7 @@
 #include "ui/style_editor_panel.h"
 #include "ui/shortcuts_panel.h"
 #include "ui/template_panel.h"
+#include "ui/animation_export_panel.h"
 #include "templates/templates.h"
 
 // Ensure path ends with .optsk for save (so Open can find the file)
@@ -139,6 +140,38 @@ struct AppState {
     opticsketch::Viewport* viewport = nullptr;
 };
 
+// Snap-to-beam result
+struct BeamSnapResult {
+    bool snapped = false;
+    glm::vec3 snapPosition{0.0f};
+    glm::vec3 beamDirection{0.0f};
+    glm::vec3 beamStart{0.0f};
+    glm::vec3 beamEnd{0.0f};
+    std::string beamId;
+};
+
+static BeamSnapResult findBeamSnap(const opticsketch::Scene& scene,
+                                   const glm::vec3& pos, float radius) {
+    BeamSnapResult result;
+    float bestDistSq = radius * radius;
+    for (const auto& beam : scene.getBeams()) {
+        if (!beam->visible) continue;
+        float t;
+        glm::vec3 closest;
+        float distSq = opticsketch::Raycast::pointToSegmentSqDist(pos, beam->start, beam->end, t, closest);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            result.snapped = true;
+            result.snapPosition = closest;
+            result.beamDirection = glm::normalize(beam->end - beam->start);
+            result.beamStart = beam->start;
+            result.beamEnd = beam->end;
+            result.beamId = beam->id;
+        }
+    }
+    return result;
+}
+
 // Scroll callback - scroll wheel for zoom (even without CTRL)
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     AppState* app = static_cast<AppState*>(glfwGetWindowUserPointer(window));
@@ -204,6 +237,7 @@ int main() {
     opticsketch::StyleEditorPanel styleEditorPanel;
     opticsketch::ShortcutsPanel shortcutsPanel;
     opticsketch::TemplatePanel templatePanel;
+    opticsketch::AnimationExportPanel animExportPanel;
 
     // Keyboard shortcuts manager
     opticsketch::ShortcutManager shortcutMgr;
@@ -317,6 +351,10 @@ int main() {
             if (shortcutMgr.justPressed("snap.toggle_grid"))
                 sceneStyle.snapToGrid = !sceneStyle.snapToGrid;
 
+            // C = Toggle beam snap
+            if (shortcutMgr.justPressed("snap.toggle_beam"))
+                sceneStyle.snapToBeam = !sceneStyle.snapToBeam;
+
             // File shortcuts
             if (shortcutMgr.justPressed("file.new")) {
                 scene.clear();
@@ -374,6 +412,10 @@ int main() {
                             tinyfd_messageBox("Export failed", "Could not save PNG file.", "ok", "error", 1);
                     }
                 }
+            }
+
+            if (shortcutMgr.justPressed("file.export_anim")) {
+                animExportPanel.show();
             }
 
             // Edit shortcuts: Delete/Backspace remove all selected elements+beams+annotations
@@ -691,6 +733,10 @@ int main() {
                     }
                 }
                 ImGui::Separator();
+                if (ImGui::MenuItem("Export Animation...", "Ctrl+Shift+E")) {
+                    animExportPanel.show();
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Import OBJ...")) {
                     const char* filters[] = { "*.obj" };
                     const char* path = tinyfd_openFileDialog("Import OBJ Mesh", nullptr, 1, filters, "Wavefront OBJ (*.obj)", 0);
@@ -996,7 +1042,7 @@ int main() {
             ImGui::Text("OpticSketch");
             ImGui::Separator();
             ImGui::Text("Version 0.1.0");
-            ImGui::Text("A lightweight desktop application for creating");
+            ImGui::Text("A lightweight multi-platform desktop application for creating");
             ImGui::Text("publication-quality optical bench diagrams.");
             ImGui::Spacing();
             ImGui::Text("Built with:");
@@ -1006,7 +1052,8 @@ int main() {
             ImGui::BulletText("GLFW");
             ImGui::BulletText("GLM");
             ImGui::Spacing();
-            ImGui::Text("License: MIT");
+            ImGui::Text("License: PolyForm Noncommercial 1.0.0");
+            ImGui::Text("Commercial licenses available at https://www.damnltd.com");
             ImGui::Spacing();
             ImGui::Text("");
             ImGui::Text("Copyright 2025:");
@@ -1015,13 +1062,13 @@ int main() {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
             if (ImGui::Selectable("Damn! LTD", false, 0, ImGui::CalcTextSize("Damn! LTD"))) {
                 #ifdef PLATFORM_LINUX
-                    std::system("xdg-open http://www.damnltd.com");
+                    std::system("xdg-open https://www.damnltd.com");
                 #elif defined(PLATFORM_WINDOWS)
-                    std::system("start http://www.damnltd.com");
+                    std::system("start https://www.damnltd.com");
                 #elif defined(__APPLE__)
-                    std::system("open http://www.damnltd.com");
+                    std::system("open https://www.damnltd.com");
                 #else
-                    std::system("xdg-open http://www.damnltd.com");
+                    std::system("xdg-open https://www.damnltd.com");
                 #endif
             }
             ImGui::PopStyleColor();
@@ -1098,6 +1145,12 @@ int main() {
 
         // Templates panel
         templatePanel.render(&scene, &undoStack, &projectPath, window);
+        animExportPanel.render(&viewport, &scene, &sceneStyle);
+
+        // Advance animation export if active (one frame per main loop iteration)
+        if (animExportPanel.isExporting()) {
+            animExportPanel.advanceExport(&viewport, &scene, &sceneStyle);
+        }
 
         // Viewport window
         if (ImGui::Begin("3D Viewport", &viewportWindowVisible)) {
@@ -1128,6 +1181,8 @@ int main() {
         ImGui::Checkbox("Snap Grid (X)", &sceneStyle.snapToGrid);
         ImGui::SameLine();
         ImGui::Checkbox("Snap Elem", &sceneStyle.snapToElement);
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap Beam (C)", &sceneStyle.snapToBeam);
 
         ImGui::EndGroup();
         
@@ -1160,6 +1215,7 @@ int main() {
                               glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
             bool inViewport = (viewportX >= 0 && viewportX < viewportSize.x && viewportY >= 0 && viewportY < viewportSize.y);
             static ManipulatorDragState manipDrag;
+            static BeamSnapResult lastBeamSnap;
             bool shiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
                                glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
             opticsketch::ToolMode currentTool = toolboxPanel.getCurrentTool();
@@ -1262,8 +1318,9 @@ int main() {
                     }
                 }
                 manipDrag.active = false;
+                lastBeamSnap.snapped = false;
             }
-            if (!app.input.leftMouseDown) manipDrag.active = false;
+            if (!app.input.leftMouseDown) { manipDrag.active = false; lastBeamSnap.snapped = false; }
             static bool selectionBoxActive = false;
             static float selectionBoxStartX = 0.0f, selectionBoxStartY = 0.0f;
             bool clickStartedInViewport = inViewport && app.input.leftMouseJustPressed
@@ -1735,10 +1792,37 @@ int main() {
                                     }
                                 }
 
+                                // Snap to beam (highest priority — overrides grid/element snap)
+                                if (sceneStyle.snapToBeam && sceneStyle.beamSnapRadius > 0.0f) {
+                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                    lastBeamSnap = findBeamSnap(scene, newCenter, sceneStyle.beamSnapRadius);
+                                    if (lastBeamSnap.snapped) {
+                                        delta = lastBeamSnap.snapPosition - manipDrag.initialGizmoCenter;
+                                    }
+                                } else {
+                                    lastBeamSnap.snapped = false;
+                                }
+
                                 // Apply delta to each selected element from its initial position
                                 for (auto& [id, initT] : manipDrag.initialTransforms) {
                                     auto* e = scene.getElement(id);
                                     if (e) e->transform.position = initT.position + delta;
+                                }
+
+                                // Auto-orient to beam if snapped
+                                if (lastBeamSnap.snapped && sceneStyle.autoOrientToBeam) {
+                                    glm::vec3 beamDir = lastBeamSnap.beamDirection;
+                                    // Orient perpendicular to beam: element faces along beam's perpendicular in XZ plane
+                                    glm::vec3 up(0.0f, 1.0f, 0.0f);
+                                    glm::vec3 perp = glm::normalize(glm::cross(up, beamDir));
+                                    if (glm::length(perp) < 1e-5f) perp = glm::vec3(1, 0, 0);
+                                    // Build rotation: element's local Z faces along beam direction
+                                    float angle = std::atan2(beamDir.x, beamDir.z);
+                                    glm::quat orient = glm::angleAxis(angle, up);
+                                    for (auto& [id, initT] : manipDrag.initialTransforms) {
+                                        auto* e = scene.getElement(id);
+                                        if (e) e->transform.rotation = orient;
+                                    }
                                 }
                             }
                         }
@@ -1842,7 +1926,12 @@ int main() {
                 // Use centroid for gizmo placement (works for both single and multi-select)
                 viewport.renderGizmoAt(selectionCentroid, gizmoType, lastGizmoHoveredHandle, exclusiveHandle);
             }
-            
+
+            // Render beam snap highlight when actively dragging and snapped
+            if (manipDrag.active && lastBeamSnap.snapped) {
+                viewport.renderBeamHighlight(lastBeamSnap.beamStart, lastBeamSnap.beamEnd, lastBeamSnap.snapPosition);
+            }
+
             viewport.endFrame();
 
             // Bloom post-process for Presentation mode
@@ -1877,6 +1966,18 @@ int main() {
                                     }
                                 }
                                 elem->transform.position = dropPos;
+                                // Snap dropped element to beam if enabled
+                                if (sceneStyle.snapToBeam && sceneStyle.beamSnapRadius > 0.0f) {
+                                    BeamSnapResult dropSnap = findBeamSnap(scene, dropPos, sceneStyle.beamSnapRadius);
+                                    if (dropSnap.snapped) {
+                                        elem->transform.position = dropSnap.snapPosition;
+                                        if (sceneStyle.autoOrientToBeam) {
+                                            glm::vec3 up(0.0f, 1.0f, 0.0f);
+                                            float angle = std::atan2(dropSnap.beamDirection.x, dropSnap.beamDirection.z);
+                                            elem->transform.rotation = glm::angleAxis(angle, up);
+                                        }
+                                    }
+                                }
                                 scene.addElement(std::move(elem));
                                 auto* added = scene.getElements().back().get();
                                 undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));

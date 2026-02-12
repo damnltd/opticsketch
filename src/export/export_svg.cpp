@@ -1,4 +1,5 @@
 #include "export/export_svg.h"
+#include "export/optical_symbols.h"
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/annotation.h"
@@ -55,20 +56,8 @@ static std::string escapeXml(const std::string& text) {
     return result;
 }
 
-// SVG shape type for each element
-enum class SvgShape { Rect, Ellipse, Circle, Diamond, Triangle };
-
-static SvgShape svgShapeFor(ElementType type) {
-    switch (type) {
-        case ElementType::Lens:         return SvgShape::Ellipse;
-        case ElementType::BeamSplitter: return SvgShape::Diamond;
-        case ElementType::FiberCoupler: return SvgShape::Circle;
-        case ElementType::Prism:        return SvgShape::Triangle;
-        default:                        return SvgShape::Rect;
-    }
-}
-
-bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
+bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style,
+               const SvgExportOptions& opts) {
     if (!scene) return false;
 
     std::ofstream out(path);
@@ -123,7 +112,7 @@ bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
         << "width=\"" << fmt(vbW) << "\" height=\"" << fmt(vbH) << "\" "
         << "viewBox=\"" << fmt(vbX) << " " << fmt(vbY) << " " << fmt(vbW) << " " << fmt(vbH) << "\">\n";
 
-    // Arrowhead marker definition
+    // Defs: arrowheads + hatching pattern
     out << "<defs>\n";
     out << "  <marker id=\"arrowhead\" markerWidth=\"10\" markerHeight=\"7\" "
         << "refX=\"10\" refY=\"3.5\" orient=\"auto\">\n";
@@ -134,6 +123,21 @@ bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
     out << "    <polygon points=\"10 0, 0 3.5, 10 7\" fill=\"currentColor\" />\n";
     out << "  </marker>\n";
     out << "</defs>\n\n";
+
+    // --- Optical Axis ---
+    if (opts.showOpticalAxis) {
+        OpticalAxis axis = detectOpticalAxis(scene->getElements());
+        if (axis.valid) {
+            float ax1 = axis.start.x * scale;
+            float ay1 = -axis.start.y * scale;
+            float ax2 = axis.end.x * scale;
+            float ay2 = -axis.end.y * scale;
+            out << "<!-- Optical Axis -->\n";
+            out << "<line x1=\"" << fmt(ax1) << "\" y1=\"" << fmt(ay1)
+                << "\" x2=\"" << fmt(ax2) << "\" y2=\"" << fmt(ay2)
+                << "\" stroke=\"gray\" stroke-width=\"0.8\" stroke-dasharray=\"6,4\" />\n\n";
+        }
+    }
 
     // --- Elements ---
     out << "<!-- Elements -->\n";
@@ -161,60 +165,15 @@ bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
         std::string strokeColor = colorToSvg(color);
         std::string fillColor = colorToSvgFill(color, 0.2f);
 
-        std::string transform;
-        if (std::abs(rotDeg) > 0.1f) {
-            transform = " transform=\"rotate(" + fmt(-rotDeg, 1) + " " + fmt(cx) + " " + fmt(cy) + ")\"";
-        }
-
-        SvgShape shape = svgShapeFor(elem->type);
-
-        switch (shape) {
-            case SvgShape::Rect:
-                out << "  <rect x=\"" << fmt(cx - w / 2) << "\" y=\"" << fmt(cy - h / 2)
-                    << "\" width=\"" << fmt(w) << "\" height=\"" << fmt(h)
-                    << "\" fill=\"" << fillColor << "\" stroke=\"" << strokeColor
-                    << "\" stroke-width=\"1.5\"" << transform << " />\n";
-                break;
-            case SvgShape::Ellipse:
-                out << "  <ellipse cx=\"" << fmt(cx) << "\" cy=\"" << fmt(cy)
-                    << "\" rx=\"" << fmt(w / 2) << "\" ry=\"" << fmt(h / 2)
-                    << "\" fill=\"" << fillColor << "\" stroke=\"" << strokeColor
-                    << "\" stroke-width=\"1.5\"" << transform << " />\n";
-                break;
-            case SvgShape::Circle: {
-                float r = std::max(w, h) / 2.0f;
-                out << "  <circle cx=\"" << fmt(cx) << "\" cy=\"" << fmt(cy)
-                    << "\" r=\"" << fmt(r)
-                    << "\" fill=\"" << fillColor << "\" stroke=\"" << strokeColor
-                    << "\" stroke-width=\"1.5\"" << transform << " />\n";
-                break;
-            }
-            case SvgShape::Diamond: {
-                out << "  <polygon points=\""
-                    << fmt(cx) << "," << fmt(cy - h / 2) << " "
-                    << fmt(cx + w / 2) << "," << fmt(cy) << " "
-                    << fmt(cx) << "," << fmt(cy + h / 2) << " "
-                    << fmt(cx - w / 2) << "," << fmt(cy) << "\""
-                    << " fill=\"" << fillColor << "\" stroke=\"" << strokeColor
-                    << "\" stroke-width=\"1.5\"" << transform << " />\n";
-                break;
-            }
-            case SvgShape::Triangle: {
-                float hw = w / 2.0f, hh = h / 2.0f;
-                out << "  <polygon points=\""
-                    << fmt(cx) << "," << fmt(cy - hh) << " "
-                    << fmt(cx + hw) << "," << fmt(cy + hh) << " "
-                    << fmt(cx - hw) << "," << fmt(cy + hh) << "\""
-                    << " fill=\"" << fillColor << "\" stroke=\"" << strokeColor
-                    << "\" stroke-width=\"1.5\"" << transform << " />\n";
-                break;
-            }
-        }
+        // Render using optical symbol
+        OpticalSymbol sym = getOpticalSymbol(elem->type);
+        out << renderSymbolSvg(sym, cx, cy, w, h, rotDeg, strokeColor, fillColor);
 
         // Label
         if (elem->showLabel) {
             out << "  <text x=\"" << fmt(cx) << "\" y=\"" << fmt(cy + h / 2 + 12)
-                << "\" text-anchor=\"middle\" font-size=\"10\" fill=\"" << strokeColor << "\">"
+                << "\" text-anchor=\"middle\" font-size=\"10\" font-family=\"serif\" fill=\""
+                << strokeColor << "\">"
                 << escapeXml(elem->label) << "</text>\n";
         }
     }
@@ -284,7 +243,7 @@ bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
         float ay = -ann->position.z * scale;
 
         out << "  <text x=\"" << fmt(ax) << "\" y=\"" << fmt(ay)
-            << "\" font-size=\"" << fmt(ann->fontSize, 0) << "\" fill=\""
+            << "\" font-size=\"" << fmt(ann->fontSize, 0) << "\" font-family=\"serif\" fill=\""
             << colorToSvg(ann->color) << "\">"
             << escapeXml(ann->text) << "</text>\n";
     }
@@ -316,10 +275,20 @@ bool exportSvg(const std::string& path, Scene* scene, SceneStyle* style) {
         float my = (sy + ey) / 2.0f;
         out << "  <text x=\"" << fmt(mx) << "\" y=\"" << fmt(my - 4)
             << "\" text-anchor=\"middle\" font-size=\"" << fmt(meas->fontSize, 0)
-            << "\" fill=\"" << measColor << "\">"
+            << "\" font-family=\"serif\" fill=\"" << measColor << "\">"
             << escapeXml(distStr.str()) << "</text>\n";
     }
     out << "</g>\n\n";
+
+    // --- Scale Bar ---
+    if (opts.showScaleBar) {
+        float sceneExtent = std::max(maxX - minX, maxY - minY) / scale;
+        ScaleBar bar = chooseScaleBar(sceneExtent);
+        // Position at bottom-right
+        float sbX = maxX - bar.lengthMm * scale;
+        float sbY = maxY + 20.0f;
+        out << renderScaleBarSvg(bar, scale, sbX, sbY);
+    }
 
     out << "</svg>\n";
 

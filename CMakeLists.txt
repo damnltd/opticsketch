@@ -191,6 +191,9 @@ add_executable(${PROJECT_NAME}
     src/export/export_png.cpp
     src/export/export_tikz.cpp
     src/export/export_svg.cpp
+    src/export/optical_symbols.cpp
+    src/export/export_animation.cpp
+    src/ui/animation_export_panel.cpp
     src/elements/element.cpp
     src/elements/basic_elements.cpp
     src/elements/annotation.cpp

@@ -52,6 +52,9 @@ struct SceneStyle {
     float gridSpacing = 25.0f;
     bool snapToElement = false;
     float elementSnapRadius = 2.0f;
+    bool snapToBeam = false;
+    float beamSnapRadius = 3.0f;
+    bool autoOrientToBeam = true;
 
     SceneStyle() { resetToDefaults(); }
     void resetToDefaults();

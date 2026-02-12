@@ -93,6 +93,10 @@ std::unique_ptr<Element> createFilter(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Filter, id.empty() ? generateId(ElementType::Filter) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.025f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.025f);
+    elem->optics.opticalType = OpticalType::Filter;
+    elem->optics.transmissivity = 0.5f;
+    elem->optics.filterColor = glm::vec3(0.6f, 0.4f, 0.8f);
+    elem->material.transparency = 0.5f;
     return elem;
 }
 
@@ -100,6 +104,8 @@ std::unique_ptr<Element> createAperture(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Aperture, id.empty() ? generateId(ElementType::Aperture) : id);
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.03f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.03f);
+    elem->optics.opticalType = OpticalType::Aperture;
+    elem->optics.apertureDiameter = 0.5f;
     return elem;
 }
 
@@ -130,6 +136,7 @@ std::unique_ptr<Element> createGrating(const std::string& id) {
     elem->boundsMin = glm::vec3(-0.5f, -0.5f, -0.02f);
     elem->boundsMax = glm::vec3(0.5f, 0.5f, 0.02f);
     elem->optics.opticalType = OpticalType::Grating;
+    elem->optics.gratingLineDensity = 600.0f;
     return elem;
 }
 
@@ -137,6 +144,8 @@ std::unique_ptr<Element> createFiberCoupler(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::FiberCoupler, id.empty() ? generateId(ElementType::FiberCoupler) : id);
     elem->boundsMin = glm::vec3(-0.2f, -0.4f, -0.2f);
     elem->boundsMax = glm::vec3(0.2f, 0.4f, 0.2f);
+    elem->optics.opticalType = OpticalType::FiberCoupler;
+    elem->optics.transmissivity = 0.7f;
     return elem;
 }
 
@@ -144,6 +153,9 @@ std::unique_ptr<Element> createScreen(const std::string& id) {
     auto elem = std::make_unique<Element>(ElementType::Screen, id.empty() ? generateId(ElementType::Screen) : id);
     elem->boundsMin = glm::vec3(-0.75f, -1.0f, -0.05f);
     elem->boundsMax = glm::vec3(0.75f, 1.0f, 0.05f);
+    elem->optics.opticalType = OpticalType::Absorber;
+    elem->optics.reflectivity = 0.0f;
+    elem->optics.transmissivity = 0.0f;
     return elem;
 }
 

@@ -147,10 +147,11 @@ void PropertiesPanel::render(Scene* scene) {
         // --- Optical Properties ---
         if (ImGui::CollapsingHeader("Optical Properties")) {
             static const char* opticalTypeNames[] = {
-                "Source", "Mirror", "Lens", "Splitter", "Absorber", "Prism", "Grating", "Passive"
+                "Source", "Mirror", "Lens", "Splitter", "Absorber", "Prism", "Grating", "Passive",
+                "Filter", "Aperture", "Fiber Coupler"
             };
             int otIdx = static_cast<int>(elem->optics.opticalType);
-            if (ImGui::Combo("Optical Type", &otIdx, opticalTypeNames, 8)) {
+            if (ImGui::Combo("Optical Type", &otIdx, opticalTypeNames, 11)) {
                 elem->optics.opticalType = static_cast<OpticalType>(otIdx);
             }
 
@@ -176,6 +177,18 @@ void PropertiesPanel::render(Scene* scene) {
                         ImGui::Text("Computed f: infinity");
                     }
                 }
+            }
+
+            if (elem->optics.opticalType == OpticalType::Filter) {
+                ImGui::ColorEdit3("Filter Color##optics", &elem->optics.filterColor.x);
+            }
+
+            if (elem->optics.opticalType == OpticalType::Aperture) {
+                ImGui::SliderFloat("Opening Size##optics", &elem->optics.apertureDiameter, 0.05f, 0.95f, "%.2f");
+            }
+
+            if (elem->optics.opticalType == OpticalType::Grating) {
+                ImGui::DragFloat("Line Density (lines/mm)##optics", &elem->optics.gratingLineDensity, 10.0f, 100.0f, 2400.0f, "%.0f");
             }
         }
 

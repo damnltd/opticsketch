@@ -125,6 +125,9 @@ bool saveProject(const std::string& path, Scene* scene, SceneStyle* style) {
         f << "transmissivity " << e.optics.transmissivity << "\n";
         f << "focallength " << e.optics.focalLength << "\n";
         f << "curvature " << e.optics.curvatureR1 << " " << e.optics.curvatureR2 << "\n";
+        f << "aperturedia " << e.optics.apertureDiameter << "\n";
+        f << "gratingdensity " << e.optics.gratingLineDensity << "\n";
+        f << "filtercolor " << e.optics.filterColor.x << " " << e.optics.filterColor.y << " " << e.optics.filterColor.z << "\n";
         // Material properties
         f << "metallic " << e.material.metallic << "\n";
         f << "roughness " << e.material.roughness << "\n";
@@ -220,6 +223,9 @@ bool saveProject(const std::string& path, Scene* scene, SceneStyle* style) {
         f << "snapgridspacing " << style->gridSpacing << "\n";
         f << "snaptoelem " << (style->snapToElement ? 1 : 0) << "\n";
         f << "snapelemradius " << style->elementSnapRadius << "\n";
+        f << "snaptobeam " << (style->snapToBeam ? 1 : 0) << "\n";
+        f << "snapbeamradius " << style->beamSnapRadius << "\n";
+        f << "autoorientbeam " << (style->autoOrientToBeam ? 1 : 0) << "\n";
         f << "showfocalpoints " << (style->showFocalPoints ? 1 : 0) << "\n";
         f << "bloomthreshold " << style->bloomThreshold << "\n";
         f << "bloomintensity " << style->bloomIntensity << "\n";
@@ -264,6 +270,10 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     float ior = -1, reflectivity = -1, transmissivity = -1;
     float focallength = -1, curvR1 = 0, curvR2 = 0;
     bool hasCurvature = false;
+    float aperturedia = -1;
+    float gratingdensity = -1;
+    float filterColorR = -1, filterColorG = -1, filterColorB = -1;
+    bool hasFilterColor = false;
     // Material properties
     float metallic = -1, roughness = -1, transparency = -1, fresnelior = -1;
 
@@ -316,6 +326,14 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
             std::istringstream ls(line.substr(10));
             ls >> curvR1 >> curvR2;
             hasCurvature = true;
+        } else if (line.compare(0, 12, "aperturedia ") == 0) {
+            aperturedia = std::stof(line.substr(12));
+        } else if (line.compare(0, 15, "gratingdensity ") == 0) {
+            gratingdensity = std::stof(line.substr(15));
+        } else if (line.compare(0, 12, "filtercolor ") == 0) {
+            std::istringstream ls(line.substr(12));
+            ls >> filterColorR >> filterColorG >> filterColorB;
+            hasFilterColor = true;
         } else if (line.compare(0, 9, "metallic ") == 0) {
             metallic = std::stof(line.substr(9));
         } else if (line.compare(0, 10, "roughness ") == 0) {
@@ -346,13 +364,16 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     elem->layer = layer;
 
     // Override optical properties if specified in file
-    if (opticaltype >= 0 && opticaltype <= 7)
+    if (opticaltype >= 0 && opticaltype <= 10)
         elem->optics.opticalType = static_cast<OpticalType>(opticaltype);
     if (ior >= 0) elem->optics.ior = ior;
     if (reflectivity >= 0) elem->optics.reflectivity = reflectivity;
     if (transmissivity >= 0) elem->optics.transmissivity = transmissivity;
     if (focallength >= 0) elem->optics.focalLength = focallength;
     if (hasCurvature) { elem->optics.curvatureR1 = curvR1; elem->optics.curvatureR2 = curvR2; }
+    if (aperturedia >= 0) elem->optics.apertureDiameter = aperturedia;
+    if (gratingdensity >= 0) elem->optics.gratingLineDensity = gratingdensity;
+    if (hasFilterColor) elem->optics.filterColor = glm::vec3(filterColorR, filterColorG, filterColorB);
 
     // Override material properties if specified
     if (metallic >= 0) elem->material.metallic = metallic;
@@ -539,6 +560,12 @@ static bool parseStyleBlock(std::istream& in, SceneStyle* style) {
             style->snapToElement = (std::stoi(line.substr(11)) != 0);
         } else if (line.compare(0, 15, "snapelemradius ") == 0) {
             style->elementSnapRadius = std::stof(line.substr(15));
+        } else if (line.compare(0, 11, "snaptobeam ") == 0) {
+            style->snapToBeam = (std::stoi(line.substr(11)) != 0);
+        } else if (line.compare(0, 15, "snapbeamradius ") == 0) {
+            style->beamSnapRadius = std::stof(line.substr(15));
+        } else if (line.compare(0, 15, "autoorientbeam ") == 0) {
+            style->autoOrientToBeam = (std::stoi(line.substr(15)) != 0);
         } else if (line.compare(0, 11, "rendermode ") == 0) {
             int rm = std::stoi(line.substr(11));
             if (rm >= 0 && rm <= 2) style->renderMode = static_cast<RenderMode>(rm);

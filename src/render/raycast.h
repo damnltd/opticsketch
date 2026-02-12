@@ -40,6 +40,11 @@ public:
     // Closest point on ray to line segment; returns t (ray param), and squared distance. hit = (t >= 0 and closest point on segment).
     static float rayToSegmentSqDist(const Ray& ray, const glm::vec3& segA, const glm::vec3& segB,
                                    float& outTRay, float& outTSeg);
+
+    // Squared distance from point P to line segment [segA, segB].
+    // outT: parametric position along segment (0..1). outClosest: closest point on segment.
+    static float pointToSegmentSqDist(const glm::vec3& P, const glm::vec3& segA, const glm::vec3& segB,
+                                      float& outT, glm::vec3& outClosest);
 };
 
 } // namespace opticsketch
