@@ -23,7 +23,12 @@
 #include "scene/scene.h"
 #include "project/project.h"
 #include "elements/basic_elements.h"
+#include "elements/annotation.h"
 #include "undo/undo.h"
+#include "style/scene_style.h"
+#include "input/shortcut_manager.h"
+#include "ui/style_editor_panel.h"
+#include "ui/shortcuts_panel.h"
 
 // Ensure path ends with .optsk for save (so Open can find the file)
 static std::string ensureOptskExtension(const std::string& path) {
@@ -85,6 +90,8 @@ struct ManipulatorDragState {
     float lastViewportX = 0.0f;
     float lastViewportY = 0.0f;
     int lastApplyFrame = -1;
+    // Multi-select: store initial transforms for all selected elements
+    std::vector<std::pair<std::string, opticsketch::Transform>> initialTransforms;
 };
 
 // Application state
@@ -143,9 +150,10 @@ int main() {
     // Undo/Redo stack
     opticsketch::UndoStack undoStack;
 
-    // Clipboard for copy/paste
-    std::unique_ptr<opticsketch::Element> clipboardElement;
-    std::unique_ptr<opticsketch::Beam> clipboardBeam;
+    // Clipboard for copy/paste (multi-select: stores vectors)
+    std::vector<std::unique_ptr<opticsketch::Element>> clipboardElements;
+    std::vector<std::unique_ptr<opticsketch::Beam>> clipboardBeams;
+    std::vector<std::unique_ptr<opticsketch::Annotation>> clipboardAnnotations;
 
     // Create library panel
     opticsketch::LibraryPanel libraryPanel;
@@ -154,6 +162,17 @@ int main() {
     opticsketch::ToolboxPanel toolboxPanel;
     opticsketch::OutlinerPanel outlinerPanel;
     opticsketch::PropertiesPanel propertiesPanel;
+    opticsketch::StyleEditorPanel styleEditorPanel;
+    opticsketch::ShortcutsPanel shortcutsPanel;
+
+    // Keyboard shortcuts manager
+    opticsketch::ShortcutManager shortcutMgr;
+    shortcutMgr.registerDefaults();
+    shortcutMgr.loadFromFile("opticsketch_keys.ini");
+
+    // Scene style (visual customization)
+    opticsketch::SceneStyle sceneStyle;
+    viewport.setStyle(&sceneStyle);
     
     // Application state
     AppState app;
@@ -228,79 +247,66 @@ int main() {
         app.input.altPressed = glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
         app.input.ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
         
-        // Handle keyboard shortcuts (only when not typing in ImGui)
+        // Handle keyboard shortcuts via ShortcutManager (only when not typing in ImGui)
         if (!ImGui::GetIO().WantTextInput) {
-            bool ctrl = app.input.ctrlPressed;
-            bool shift = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
-            
-            // Tool shortcuts (Q, W, E, R, B) - Maya style
-            static bool qPressed = false, wPressed = false, ePressed = false, rPressed = false, bPressed = false;
-            bool qNow = glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS;
-            bool wNow = glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS;
-            bool eNow = glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS;
-            bool rNow = glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS;
-            bool bNow = glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS;
-            
-            if (qNow && !qPressed) {
+            shortcutMgr.updateKeyStates(window);
+
+            // Tool shortcuts (Q, W, E, R, B, T) - Maya style
+            if (shortcutMgr.justPressed("tool.select"))
                 toolboxPanel.setTool(opticsketch::ToolMode::Select);
-            }
-            if (wNow && !wPressed) {
+            if (shortcutMgr.justPressed("tool.move"))
                 toolboxPanel.setTool(opticsketch::ToolMode::Move);
-            }
-            if (eNow && !ePressed) {
+            if (shortcutMgr.justPressed("tool.rotate"))
                 toolboxPanel.setTool(opticsketch::ToolMode::Rotate);
-            }
-            if (rNow && !rPressed) {
+            if (shortcutMgr.justPressed("tool.scale"))
                 toolboxPanel.setTool(opticsketch::ToolMode::Scale);
-            }
-            if (bNow && !bPressed) {
+            if (shortcutMgr.justPressed("tool.beam"))
                 toolboxPanel.setTool(opticsketch::ToolMode::DrawBeam);
-            }
-            
-            qPressed = qNow;
-            wPressed = wNow;
-            ePressed = eNow;
-            rPressed = rNow;
-            bPressed = bNow;
-            
+            if (shortcutMgr.justPressed("tool.annotation"))
+                toolboxPanel.setTool(opticsketch::ToolMode::PlaceAnnotation);
+
+            // X = Toggle grid snap
+            if (shortcutMgr.justPressed("snap.toggle_grid"))
+                sceneStyle.snapToGrid = !sceneStyle.snapToGrid;
+
             // File shortcuts
-            if (ctrl && glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) {
+            if (shortcutMgr.justPressed("file.new")) {
                 scene.clear();
                 undoStack.clear();
                 projectPath.clear();
                 glfwSetWindowTitle(window, "OpticSketch - Untitled");
             }
-            if (ctrl && shift && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+            if (shortcutMgr.justPressed("file.save_as")) {
                 const char* filters[] = { "*.optsk" };
                 const char* path = tinyfd_saveFileDialog("Save OpticSketch Project As", projectPath.empty() ? "untitled.optsk" : projectPath.c_str(), 1, filters, "OpticSketch Project (*.optsk)");
                 if (path) {
                     std::string savePath = ensureOptskExtension(path);
-                    if (opticsketch::saveProject(savePath, &scene)) {
+                    if (opticsketch::saveProject(savePath, &scene, &sceneStyle)) {
                         projectPath = savePath;
                         glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                     }
                 }
-            } else if (ctrl && glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+            } else if (shortcutMgr.justPressed("file.save")) {
                 if (projectPath.empty()) {
                     const char* filters[] = { "*.optsk" };
                     const char* path = tinyfd_saveFileDialog("Save OpticSketch Project", "untitled.optsk", 1, filters, "OpticSketch Project (*.optsk)");
                     if (path) {
                         std::string savePath = ensureOptskExtension(path);
-                        if (opticsketch::saveProject(savePath, &scene)) {
+                        if (opticsketch::saveProject(savePath, &scene, &sceneStyle)) {
                             projectPath = savePath;
                             glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                         }
                     }
                 } else {
-                    opticsketch::saveProject(projectPath, &scene);
+                    opticsketch::saveProject(projectPath, &scene, &sceneStyle);
                 }
             }
-            if (ctrl && glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) {
+            if (shortcutMgr.justPressed("file.open")) {
                 const char* filters[] = { "*.optsk" };
                 const char* path = tinyfd_openFileDialog("Open OpticSketch Project", projectPath.empty() ? nullptr : projectPath.c_str(), 1, filters, "OpticSketch Project (*.optsk)", 0);
                 if (path) {
                     std::string openPath = trimPath(path);
-                    if (!openPath.empty() && opticsketch::loadProject(openPath, &scene)) {
+                    if (!openPath.empty() && opticsketch::loadProject(openPath, &scene, &sceneStyle)) {
                         undoStack.clear();
                         projectPath = openPath;
                         glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
@@ -308,7 +314,7 @@ int main() {
                         tinyfd_messageBox("Open failed", "Could not open project file or file format is invalid.", "ok", "error", 1);
                 }
             }
-            if (ctrl && glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+            if (shortcutMgr.justPressed("file.export_png")) {
                 const char* filters[] = { "*.png" };
                 const char* path = tinyfd_saveFileDialog("Export PNG", "viewport.png", 1, filters, "PNG image (*.png)");
                 if (path) {
@@ -321,48 +327,60 @@ int main() {
                     }
                 }
             }
-            
-            // Edit shortcuts: Delete/Backspace remove selected element (once per key press, no repeat)
-            static bool delPressed = false, backPressed = false;
-            bool delNow = glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS;
-            bool backNow = glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS;
-            if ((delNow && !delPressed) || (backNow && !backPressed)) {
-                if (scene.getSelectedElement()) {
-                    undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*scene.getSelectedElement()));
-                    scene.removeElement(scene.getSelectedElement()->id);
-                } else if (scene.getSelectedBeam()) {
-                    undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*scene.getSelectedBeam()));
-                    scene.removeBeam(scene.getSelectedBeam()->id);
+
+            // Edit shortcuts: Delete/Backspace remove all selected elements+beams+annotations
+            if (shortcutMgr.justPressed("edit.delete") || shortcutMgr.justPressed("edit.delete_alt")) {
+                auto selElems = scene.getSelectedElements();
+                auto selBeams = scene.getSelectedBeams();
+                auto selAnns = scene.getSelectedAnnotations();
+                if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                    auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                    for (auto* e : selElems)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveElementCmd>(*e));
+                    for (auto* b : selBeams)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveBeamCmd>(*b));
+                    for (auto* a : selAnns)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveAnnotationCmd>(*a));
+                    undoStack.push(std::move(compound));
+                    for (auto* e : selElems) scene.removeElement(e->id);
+                    for (auto* b : selBeams) scene.removeBeam(b->id);
+                    for (auto* a : selAnns) scene.removeAnnotation(a->id);
                 }
-            }
-            delPressed = delNow;
-            backPressed = backNow;
-            
-            // View shortcuts
-            if (glfwGetKey(window, GLFW_KEY_HOME) == GLFW_PRESS) {
-                viewport.getCamera().resetView();
             }
 
-            // F = Frame Selected, A = Frame All
-            static bool fPressed = false, aPressed = false;
-            bool fNow = glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
-            bool aNow = glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS;
-            if (fNow && !fPressed) {
-                auto* selElem = scene.getSelectedElement();
-                auto* selBeam = scene.getSelectedBeam();
-                if (selElem) {
-                    glm::vec3 bMin, bMax;
-                    selElem->getWorldBounds(bMin, bMax);
-                    glm::vec3 center = (bMin + bMax) * 0.5f;
-                    float radius = glm::length(bMax - bMin) * 0.5f;
-                    viewport.getCamera().frameOn(center, radius);
-                } else if (selBeam) {
-                    glm::vec3 center = (selBeam->start + selBeam->end) * 0.5f;
-                    float radius = glm::length(selBeam->end - selBeam->start) * 0.5f;
+            // View shortcuts
+            if (shortcutMgr.justPressed("view.reset"))
+                viewport.getCamera().resetView();
+
+            if (shortcutMgr.justPressed("view.frame_selected")) {
+                auto selElems = scene.getSelectedElements();
+                auto selBeams = scene.getSelectedBeams();
+                auto selAnns = scene.getSelectedAnnotations();
+                if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                    glm::vec3 unionMin(FLT_MAX), unionMax(-FLT_MAX);
+                    for (auto* e : selElems) {
+                        glm::vec3 bMin, bMax;
+                        e->getWorldBounds(bMin, bMax);
+                        unionMin = glm::min(unionMin, bMin);
+                        unionMax = glm::max(unionMax, bMax);
+                    }
+                    for (auto* b : selBeams) {
+                        unionMin = glm::min(unionMin, glm::min(b->start, b->end));
+                        unionMax = glm::max(unionMax, glm::max(b->start, b->end));
+                    }
+                    for (auto* a : selAnns) {
+                        unionMin = glm::min(unionMin, a->position);
+                        unionMax = glm::max(unionMax, a->position);
+                    }
+                    glm::vec3 center = (unionMin + unionMax) * 0.5f;
+                    float radius = glm::length(unionMax - unionMin) * 0.5f;
                     viewport.getCamera().frameOn(center, radius);
                 }
             }
-            if (aNow && !aPressed) {
+            if (shortcutMgr.justPressed("edit.select_all")) {
+                scene.selectAll();
+            }
+            if (shortcutMgr.justPressed("view.frame_all")) {
                 glm::vec3 sceneMin(FLT_MAX), sceneMax(-FLT_MAX);
                 bool hasObjects = false;
                 for (const auto& elem : scene.getElements()) {
@@ -387,77 +405,84 @@ int main() {
                     viewport.getCamera().resetView();
                 }
             }
-            fPressed = fNow;
-            aPressed = aNow;
 
-            // Undo/Redo: Ctrl+Z / Ctrl+Y
-            static bool zPressed = false, yPressed = false;
-            bool zNow = glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS;
-            bool yNow = glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS;
-            if (ctrl && zNow && !zPressed) {
+            // Undo/Redo
+            if (shortcutMgr.justPressed("edit.undo"))
                 undoStack.undo(scene);
-            }
-            if (ctrl && yNow && !yPressed) {
+            if (shortcutMgr.justPressed("edit.redo"))
                 undoStack.redo(scene);
-            }
-            zPressed = zNow;
-            yPressed = yNow;
 
-            // Copy/Cut/Paste: Ctrl+C / Ctrl+X / Ctrl+V
-            static bool cPressed = false, xPressed = false, vPressed = false;
-            bool cNow = glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS;
-            bool xNow = glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS;
-            bool vNow = glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS;
-            if (ctrl && cNow && !cPressed) {
-                // Copy selected element or beam
-                clipboardElement.reset();
-                clipboardBeam.reset();
-                if (scene.getSelectedElement()) {
-                    clipboardElement = scene.getSelectedElement()->clone();
-                } else if (scene.getSelectedBeam()) {
-                    clipboardBeam = scene.getSelectedBeam()->clone();
+            // Copy/Cut/Paste (multi-select aware)
+            if (shortcutMgr.justPressed("edit.copy")) {
+                clipboardElements.clear();
+                clipboardBeams.clear();
+                clipboardAnnotations.clear();
+                for (auto* e : scene.getSelectedElements())
+                    clipboardElements.push_back(e->clone());
+                for (auto* b : scene.getSelectedBeams())
+                    clipboardBeams.push_back(b->clone());
+                for (auto* a : scene.getSelectedAnnotations())
+                    clipboardAnnotations.push_back(a->clone());
+            }
+            if (shortcutMgr.justPressed("edit.cut")) {
+                clipboardElements.clear();
+                clipboardBeams.clear();
+                clipboardAnnotations.clear();
+                auto selElems = scene.getSelectedElements();
+                auto selBeams = scene.getSelectedBeams();
+                auto selAnns = scene.getSelectedAnnotations();
+                for (auto* e : selElems)
+                    clipboardElements.push_back(e->clone());
+                for (auto* b : selBeams)
+                    clipboardBeams.push_back(b->clone());
+                for (auto* a : selAnns)
+                    clipboardAnnotations.push_back(a->clone());
+                if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                    auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                    for (auto* e : selElems)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveElementCmd>(*e));
+                    for (auto* b : selBeams)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveBeamCmd>(*b));
+                    for (auto* a : selAnns)
+                        compound->addCommand(std::make_unique<opticsketch::RemoveAnnotationCmd>(*a));
+                    undoStack.push(std::move(compound));
+                    for (auto* e : selElems) scene.removeElement(e->id);
+                    for (auto* b : selBeams) scene.removeBeam(b->id);
+                    for (auto* a : selAnns) scene.removeAnnotation(a->id);
                 }
             }
-            if (ctrl && xNow && !xPressed) {
-                // Cut = copy + delete
-                clipboardElement.reset();
-                clipboardBeam.reset();
-                if (scene.getSelectedElement()) {
-                    auto* sel = scene.getSelectedElement();
-                    clipboardElement = sel->clone();
-                    undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*sel));
-                    scene.removeElement(sel->id);
-                } else if (scene.getSelectedBeam()) {
-                    auto* sel = scene.getSelectedBeam();
-                    clipboardBeam = sel->clone();
-                    undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*sel));
-                    scene.removeBeam(sel->id);
+            if (shortcutMgr.justPressed("edit.paste")) {
+                if (!clipboardElements.empty() || !clipboardBeams.empty() || !clipboardAnnotations.empty()) {
+                    scene.deselectAll();
+                    auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                    for (const auto& ce : clipboardElements) {
+                        auto pasted = ce->clone();
+                        pasted->transform.position += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addElement(std::move(pasted));
+                        auto* added = scene.getElements().back().get();
+                        compound->addCommand(std::make_unique<opticsketch::AddElementCmd>(*added));
+                        scene.selectElement(added->id, true);
+                    }
+                    for (const auto& cb : clipboardBeams) {
+                        auto pasted = cb->clone();
+                        pasted->start += glm::vec3(1.0f, 0.0f, 0.0f);
+                        pasted->end += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addBeam(std::move(pasted));
+                        auto* added = scene.getBeams().back().get();
+                        compound->addCommand(std::make_unique<opticsketch::AddBeamCmd>(*added));
+                        scene.selectBeam(added->id, true);
+                    }
+                    for (const auto& ca : clipboardAnnotations) {
+                        auto pasted = ca->clone();
+                        pasted->position += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addAnnotation(std::move(pasted));
+                        auto* added = scene.getAnnotations().back().get();
+                        compound->addCommand(std::make_unique<opticsketch::AddAnnotationCmd>(*added));
+                        scene.selectAnnotation(added->id, true);
+                    }
+                    undoStack.push(std::move(compound));
                 }
             }
-            if (ctrl && vNow && !vPressed) {
-                // Paste from clipboard
-                if (clipboardElement) {
-                    auto pasted = clipboardElement->clone();
-                    pasted->transform.position += glm::vec3(1.0f, 0.0f, 0.0f); // offset
-                    std::string pastedId = pasted->id;
-                    scene.addElement(std::move(pasted));
-                    // ID may have been adjusted by ensureUniqueId — find by scanning last element
-                    auto* added = scene.getElements().back().get();
-                    undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));
-                    scene.selectElement(added->id);
-                } else if (clipboardBeam) {
-                    auto pasted = clipboardBeam->clone();
-                    pasted->start += glm::vec3(1.0f, 0.0f, 0.0f);
-                    pasted->end += glm::vec3(1.0f, 0.0f, 0.0f);
-                    scene.addBeam(std::move(pasted));
-                    auto* added = scene.getBeams().back().get();
-                    undoStack.push(std::make_unique<opticsketch::AddBeamCmd>(*added));
-                    scene.selectBeam(added->id);
-                }
-            }
-            cPressed = cNow;
-            xPressed = xNow;
-            vPressed = vNow;
         }
         
         ImGui_ImplOpenGL3_NewFrame();
@@ -477,51 +502,51 @@ int main() {
         if (ImGui::BeginMainMenuBar()) {
             // File menu
             if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("New Project", "Ctrl+N")) {
+                if (ImGui::MenuItem("New Project", shortcutMgr.getDisplayString("file.new").c_str())) {
                     scene.clear();
                     projectPath.clear();
                     glfwSetWindowTitle(window, "OpticSketch - Untitled");
                 }
-                if (ImGui::MenuItem("Open Project...", "Ctrl+O")) {
+                if (ImGui::MenuItem("Open Project...", shortcutMgr.getDisplayString("file.open").c_str())) {
                     const char* filters[] = { "*.optsk" };
                     const char* path = tinyfd_openFileDialog("Open OpticSketch Project", projectPath.empty() ? nullptr : projectPath.c_str(), 1, filters, "OpticSketch Project (*.optsk)", 0);
                     if (path) {
                         std::string openPath = trimPath(path);
-                        if (!openPath.empty() && opticsketch::loadProject(openPath, &scene)) {
+                        if (!openPath.empty() && opticsketch::loadProject(openPath, &scene, &sceneStyle)) {
                             projectPath = openPath;
                             glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                         } else if (!openPath.empty())
                             tinyfd_messageBox("Open failed", "Could not open project file or file format is invalid.", "ok", "error", 1);
                     }
                 }
-                if (ImGui::MenuItem("Save Project", "Ctrl+S")) {
+                if (ImGui::MenuItem("Save Project", shortcutMgr.getDisplayString("file.save").c_str())) {
                     if (projectPath.empty()) {
                         const char* filters[] = { "*.optsk" };
                         const char* path = tinyfd_saveFileDialog("Save OpticSketch Project", "untitled.optsk", 1, filters, "OpticSketch Project (*.optsk)");
                         if (path) {
                             std::string savePath = ensureOptskExtension(path);
-                            if (opticsketch::saveProject(savePath, &scene)) {
+                            if (opticsketch::saveProject(savePath, &scene, &sceneStyle)) {
                                 projectPath = savePath;
                                 glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                             }
                         }
                     } else {
-                        opticsketch::saveProject(projectPath, &scene);
+                        opticsketch::saveProject(projectPath, &scene, &sceneStyle);
                     }
                 }
-                if (ImGui::MenuItem("Save Project As...", "Ctrl+Shift+S")) {
+                if (ImGui::MenuItem("Save Project As...", shortcutMgr.getDisplayString("file.save_as").c_str())) {
                     const char* filters[] = { "*.optsk" };
                     const char* path = tinyfd_saveFileDialog("Save OpticSketch Project As", projectPath.empty() ? "untitled.optsk" : projectPath.c_str(), 1, filters, "OpticSketch Project (*.optsk)");
                     if (path) {
                         std::string savePath = ensureOptskExtension(path);
-                        if (opticsketch::saveProject(savePath, &scene)) {
+                        if (opticsketch::saveProject(savePath, &scene, &sceneStyle)) {
                             projectPath = savePath;
                             glfwSetWindowTitle(window, ("OpticSketch - " + projectPath.substr(projectPath.find_last_of("/\\") + 1)).c_str());
                         }
                     }
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Export PNG...", "Ctrl+E")) {
+                if (ImGui::MenuItem("Export PNG...", shortcutMgr.getDisplayString("file.export_png").c_str())) {
                     const char* filters[] = { "*.png" };
                     const char* path = tinyfd_saveFileDialog("Export PNG", "viewport.png", 1, filters, "PNG image (*.png)");
                     if (path) {
@@ -566,71 +591,106 @@ int main() {
             }
             
             // Edit menu
-            bool hasSelection = scene.getSelectedElement() != nullptr || scene.getSelectedBeam() != nullptr;
-            bool hasClipboard = clipboardElement != nullptr || clipboardBeam != nullptr;
+            bool hasSelection = scene.getSelectionCount() > 0;
+            bool hasClipboard = !clipboardElements.empty() || !clipboardBeams.empty() || !clipboardAnnotations.empty();
             if (ImGui::BeginMenu("Edit")) {
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, undoStack.canUndo())) {
+                if (ImGui::MenuItem("Undo", shortcutMgr.getDisplayString("edit.undo").c_str(), false, undoStack.canUndo())) {
                     undoStack.undo(scene);
                 }
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, undoStack.canRedo())) {
+                if (ImGui::MenuItem("Redo", shortcutMgr.getDisplayString("edit.redo").c_str(), false, undoStack.canRedo())) {
                     undoStack.redo(scene);
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection)) {
-                    clipboardElement.reset();
-                    clipboardBeam.reset();
-                    if (scene.getSelectedElement()) {
-                        auto* sel = scene.getSelectedElement();
-                        clipboardElement = sel->clone();
-                        undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*sel));
-                        scene.removeElement(sel->id);
-                    } else if (scene.getSelectedBeam()) {
-                        auto* sel = scene.getSelectedBeam();
-                        clipboardBeam = sel->clone();
-                        undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*sel));
-                        scene.removeBeam(sel->id);
+                if (ImGui::MenuItem("Cut", shortcutMgr.getDisplayString("edit.cut").c_str(), false, hasSelection)) {
+                    clipboardElements.clear();
+                    clipboardBeams.clear();
+                    clipboardAnnotations.clear();
+                    auto selElems = scene.getSelectedElements();
+                    auto selBeams = scene.getSelectedBeams();
+                    auto selAnns = scene.getSelectedAnnotations();
+                    for (auto* e : selElems)
+                        clipboardElements.push_back(e->clone());
+                    for (auto* b : selBeams)
+                        clipboardBeams.push_back(b->clone());
+                    for (auto* a : selAnns)
+                        clipboardAnnotations.push_back(a->clone());
+                    if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                        auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                        for (auto* e : selElems)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveElementCmd>(*e));
+                        for (auto* b : selBeams)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveBeamCmd>(*b));
+                        for (auto* a : selAnns)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveAnnotationCmd>(*a));
+                        undoStack.push(std::move(compound));
+                        for (auto* e : selElems) scene.removeElement(e->id);
+                        for (auto* b : selBeams) scene.removeBeam(b->id);
+                        for (auto* a : selAnns) scene.removeAnnotation(a->id);
                     }
                 }
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection)) {
-                    clipboardElement.reset();
-                    clipboardBeam.reset();
-                    if (scene.getSelectedElement()) {
-                        clipboardElement = scene.getSelectedElement()->clone();
-                    } else if (scene.getSelectedBeam()) {
-                        clipboardBeam = scene.getSelectedBeam()->clone();
-                    }
+                if (ImGui::MenuItem("Copy", shortcutMgr.getDisplayString("edit.copy").c_str(), false, hasSelection)) {
+                    clipboardElements.clear();
+                    clipboardBeams.clear();
+                    clipboardAnnotations.clear();
+                    for (auto* e : scene.getSelectedElements())
+                        clipboardElements.push_back(e->clone());
+                    for (auto* b : scene.getSelectedBeams())
+                        clipboardBeams.push_back(b->clone());
+                    for (auto* a : scene.getSelectedAnnotations())
+                        clipboardAnnotations.push_back(a->clone());
                 }
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, hasClipboard)) {
-                    if (clipboardElement) {
-                        auto pasted = clipboardElement->clone();
+                if (ImGui::MenuItem("Paste", shortcutMgr.getDisplayString("edit.paste").c_str(), false, hasClipboard)) {
+                    scene.deselectAll();
+                    auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                    for (const auto& ce : clipboardElements) {
+                        auto pasted = ce->clone();
                         pasted->transform.position += glm::vec3(1.0f, 0.0f, 0.0f);
                         scene.addElement(std::move(pasted));
                         auto* added = scene.getElements().back().get();
-                        undoStack.push(std::make_unique<opticsketch::AddElementCmd>(*added));
-                        scene.selectElement(added->id);
-                    } else if (clipboardBeam) {
-                        auto pasted = clipboardBeam->clone();
+                        compound->addCommand(std::make_unique<opticsketch::AddElementCmd>(*added));
+                        scene.selectElement(added->id, true);
+                    }
+                    for (const auto& cb : clipboardBeams) {
+                        auto pasted = cb->clone();
                         pasted->start += glm::vec3(1.0f, 0.0f, 0.0f);
                         pasted->end += glm::vec3(1.0f, 0.0f, 0.0f);
                         scene.addBeam(std::move(pasted));
                         auto* added = scene.getBeams().back().get();
-                        undoStack.push(std::make_unique<opticsketch::AddBeamCmd>(*added));
-                        scene.selectBeam(added->id);
+                        compound->addCommand(std::make_unique<opticsketch::AddBeamCmd>(*added));
+                        scene.selectBeam(added->id, true);
+                    }
+                    for (const auto& ca : clipboardAnnotations) {
+                        auto pasted = ca->clone();
+                        pasted->position += glm::vec3(1.0f, 0.0f, 0.0f);
+                        scene.addAnnotation(std::move(pasted));
+                        auto* added = scene.getAnnotations().back().get();
+                        compound->addCommand(std::make_unique<opticsketch::AddAnnotationCmd>(*added));
+                        scene.selectAnnotation(added->id, true);
+                    }
+                    undoStack.push(std::move(compound));
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete", shortcutMgr.getDisplayString("edit.delete").c_str(), false, hasSelection)) {
+                    auto selElems = scene.getSelectedElements();
+                    auto selBeams = scene.getSelectedBeams();
+                    auto selAnns = scene.getSelectedAnnotations();
+                    if (!selElems.empty() || !selBeams.empty() || !selAnns.empty()) {
+                        auto compound = std::make_unique<opticsketch::CompoundUndoCmd>();
+                        for (auto* e : selElems)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveElementCmd>(*e));
+                        for (auto* b : selBeams)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveBeamCmd>(*b));
+                        for (auto* a : selAnns)
+                            compound->addCommand(std::make_unique<opticsketch::RemoveAnnotationCmd>(*a));
+                        undoStack.push(std::move(compound));
+                        for (auto* e : selElems) scene.removeElement(e->id);
+                        for (auto* b : selBeams) scene.removeBeam(b->id);
+                        for (auto* a : selAnns) scene.removeAnnotation(a->id);
                     }
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", "Del", false, hasSelection)) {
-                    if (scene.getSelectedElement()) {
-                        undoStack.push(std::make_unique<opticsketch::RemoveElementCmd>(*scene.getSelectedElement()));
-                        scene.removeElement(scene.getSelectedElement()->id);
-                    } else if (scene.getSelectedBeam()) {
-                        undoStack.push(std::make_unique<opticsketch::RemoveBeamCmd>(*scene.getSelectedBeam()));
-                        scene.removeBeam(scene.getSelectedBeam()->id);
-                    }
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Select All", "Ctrl+A")) {
-                    // TODO: Select all
+                if (ImGui::MenuItem("Select All", shortcutMgr.getDisplayString("edit.select_all").c_str())) {
+                    scene.selectAll();
                 }
                 ImGui::EndMenu();
             }
@@ -647,7 +707,7 @@ int main() {
                     viewport.getCamera().setMode(opticsketch::CameraMode::Perspective3D);
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Reset View", "Home")) {
+                if (ImGui::MenuItem("Reset View", shortcutMgr.getDisplayString("view.reset").c_str())) {
                     viewport.getCamera().resetView();
                 }
                 ImGui::Separator();
@@ -672,6 +732,12 @@ int main() {
                 }
                 if (ImGui::MenuItem("Toolbox", nullptr, toolboxPanel.isVisible())) {
                     toolboxPanel.setVisible(!toolboxPanel.isVisible());
+                }
+                if (ImGui::MenuItem("Style Editor", nullptr, styleEditorPanel.isVisible())) {
+                    styleEditorPanel.setVisible(!styleEditorPanel.isVisible());
+                }
+                if (ImGui::MenuItem("Keyboard Shortcuts", nullptr, shortcutsPanel.isVisible())) {
+                    shortcutsPanel.setVisible(!shortcutsPanel.isVisible());
                 }
                 ImGui::EndMenu();
             }
@@ -773,7 +839,13 @@ int main() {
         
         // Properties (selected element)
         propertiesPanel.render(&scene);
-        
+
+        // Style editor
+        styleEditorPanel.render(&sceneStyle);
+
+        // Keyboard shortcuts panel
+        shortcutsPanel.render(&shortcutMgr);
+
         // Viewport window
         if (ImGui::Begin("3D Viewport", &viewportWindowVisible)) {
         
@@ -796,7 +868,14 @@ int main() {
         ImGui::Text("|");
         ImGui::SameLine();
         ImGui::Text("Elements: %zu", scene.getElements().size());
-        
+
+        ImGui::SameLine();
+        ImGui::Text("|");
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap Grid (X)", &sceneStyle.snapToGrid);
+        ImGui::SameLine();
+        ImGui::Checkbox("Snap Elem", &sceneStyle.snapToElement);
+
         ImGui::EndGroup();
         
         ImGui::Separator();
@@ -828,27 +907,105 @@ int main() {
                               glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
             bool inViewport = (viewportX >= 0 && viewportX < viewportSize.x && viewportY >= 0 && viewportY < viewportSize.y);
             static ManipulatorDragState manipDrag;
-            opticsketch::Element* selectedElem = scene.getSelectedElement();
+            bool shiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
             opticsketch::ToolMode currentTool = toolboxPanel.getCurrentTool();
-            if (selectedElem && currentTool != opticsketch::ToolMode::Select && inViewport) {
+
+            // Compute centroid of all selected elements for gizmo placement
+            auto selectedElems = scene.getSelectedElements();
+            glm::vec3 selectionCentroid(0.0f);
+            bool hasSelectedElements = !selectedElems.empty();
+            if (hasSelectedElements) {
+                glm::vec3 bboxMin(FLT_MAX), bboxMax(-FLT_MAX);
+                for (auto* e : selectedElems) {
+                    glm::vec3 wMin, wMax;
+                    e->getWorldBounds(wMin, wMax);
+                    bboxMin = glm::min(bboxMin, wMin);
+                    bboxMax = glm::max(bboxMax, wMax);
+                }
+                selectionCentroid = (bboxMin + bboxMax) * 0.5f;
+            }
+
+            // Pre-compute annotation screen rects for click detection and box-select
+            struct AnnScreenRect { std::string id; float rminX, rminY, rmaxX, rmaxY; };
+            std::vector<AnnScreenRect> annScreenRects;
+            {
+                glm::mat4 annVpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                for (const auto& ann : scene.getAnnotations()) {
+                    if (!ann->visible) continue;
+                    glm::vec4 clip = annVpMat * glm::vec4(ann->position, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float scx = (ndc.x * 0.5f + 0.5f) * vpWidth;
+                    float scy = (1.0f - (ndc.y * 0.5f + 0.5f)) * vpHeight;
+                    if (scx < 0 || scx > viewportSize.x || scy < 0 || scy > viewportSize.y) continue;
+                    const char* annText = ann->text.c_str();
+                    ImVec2 textSz = ImGui::CalcTextSize(annText);
+                    float padX = 6.0f, padY = 4.0f;
+                    float lx = scx - textSz.x * 0.5f;
+                    float ly = scy - textSz.y * 0.5f;
+                    annScreenRects.push_back({ann->id, lx - padX, ly - padY, lx + textSz.x + padX, ly + textSz.y + padY});
+                }
+            }
+
+            // Annotation drag state (for dragging annotation billboards)
+            static struct { bool active; std::string id; glm::vec3 initPos; } annDrag = {false, "", glm::vec3(0)};
+
+            // Handle annotation drag release
+            if (annDrag.active && !app.input.leftMouseDown) {
+                auto* ann = scene.getAnnotation(annDrag.id);
+                if (ann && glm::length(ann->position - annDrag.initPos) > 1e-5f) {
+                    undoStack.push(std::make_unique<opticsketch::MoveAnnotationCmd>(annDrag.id, annDrag.initPos, ann->position));
+                }
+                annDrag.active = false;
+            }
+
+            // Apply annotation drag (update position while dragging)
+            if (annDrag.active && app.input.leftMouseDown && inViewport) {
+                opticsketch::Raycast::Ray annRay = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                float t = -annRay.origin.y / annRay.direction.y;
+                if (t > 0.0f && std::abs(annRay.direction.y) > 1e-5f) {
+                    glm::vec3 hitPoint = annRay.origin + t * annRay.direction;
+                    hitPoint.y = 0.0f;
+                    auto* ann = scene.getAnnotation(annDrag.id);
+                    if (ann) ann->position = hitPoint;
+                }
+            }
+
+            if (hasSelectedElements && currentTool != opticsketch::ToolMode::Select && inViewport) {
                 opticsketch::GizmoType gType = (currentTool == opticsketch::ToolMode::Move) ? opticsketch::GizmoType::Move :
                     (currentTool == opticsketch::ToolMode::Rotate) ? opticsketch::GizmoType::Rotate : opticsketch::GizmoType::Scale;
-                lastGizmoHoveredHandle = viewport.getGizmoHoveredHandle(selectedElem, gType, viewportX, viewportY);
+                // Use a temp element at centroid for gizmo hit testing
+                opticsketch::Element tmpForGizmo(opticsketch::ElementType::Laser, "__gizmo_tmp");
+                tmpForGizmo.transform.position = selectionCentroid;
+                lastGizmoHoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY);
             } else {
                 lastGizmoHoveredHandle = -1;
             }
             if (!app.input.leftMouseDown && manipDrag.active) {
-                // Drag just ended — push transform undo command
-                auto* selE = scene.getSelectedElement();
-                if (selE) {
-                    opticsketch::Transform newT = selE->transform;
-                    opticsketch::Transform oldT;
-                    oldT.position = manipDrag.initialPosition;
-                    oldT.rotation = manipDrag.initialRotation;
-                    oldT.scale = manipDrag.initialScale;
-                    // Only push if transform actually changed
-                    if (oldT.position != newT.position || oldT.rotation != newT.rotation || oldT.scale != newT.scale) {
-                        undoStack.push(std::make_unique<opticsketch::TransformElementCmd>(selE->id, oldT, newT));
+                // Drag just ended — push undo for all selected elements
+                if (!manipDrag.initialTransforms.empty()) {
+                    std::vector<std::pair<std::string, opticsketch::Transform>> newTransforms;
+                    for (auto& [id, oldT] : manipDrag.initialTransforms) {
+                        auto* e = scene.getElement(id);
+                        if (e) newTransforms.push_back({id, e->transform});
+                    }
+                    // Only push if at least one transform changed
+                    bool anyChanged = false;
+                    for (size_t i = 0; i < manipDrag.initialTransforms.size(); i++) {
+                        if (i < newTransforms.size()) {
+                            auto& oldT = manipDrag.initialTransforms[i].second;
+                            auto& newT = newTransforms[i].second;
+                            if (oldT.position != newT.position || oldT.rotation != newT.rotation || oldT.scale != newT.scale) {
+                                anyChanged = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (anyChanged) {
+                        undoStack.push(std::make_unique<opticsketch::MultiTransformCmd>(
+                            manipDrag.initialTransforms, newTransforms));
                     }
                 }
                 manipDrag.active = false;
@@ -927,20 +1084,50 @@ int main() {
                 previewBeamPtr = nullptr;
             }
             
-            if (!ctrlPressed && clickStartedInViewport && !app.input.isDraggingCamera && currentTool != opticsketch::ToolMode::DrawBeam) {
+            // Annotation placement: click in PlaceAnnotation mode to drop annotation on Y=0
+            if (currentTool == opticsketch::ToolMode::PlaceAnnotation && clickStartedInViewport && !ctrlPressed && !app.input.isDraggingCamera) {
+                opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
+                    viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
+                float t = -ray.origin.y / ray.direction.y;
+                if (t > 0.0f && std::abs(ray.direction.y) > 1e-5f) {
+                    glm::vec3 hitPoint = ray.origin + t * ray.direction;
+                    hitPoint.y = 0.0f;
+                    auto ann = std::make_unique<opticsketch::Annotation>();
+                    ann->position = hitPoint;
+                    std::string annId = ann->id;
+                    scene.addAnnotation(std::move(ann));
+                    auto* added = scene.getAnnotations().back().get();
+                    undoStack.push(std::make_unique<opticsketch::AddAnnotationCmd>(*added));
+                    scene.selectAnnotation(annId);
+                    toolboxPanel.setTool(opticsketch::ToolMode::Select);
+                }
+            }
+
+            if (!ctrlPressed && clickStartedInViewport && !app.input.isDraggingCamera && currentTool != opticsketch::ToolMode::DrawBeam && currentTool != opticsketch::ToolMode::PlaceAnnotation) {
                 int hoveredHandle = -1;
-                if (selectedElem && currentTool != opticsketch::ToolMode::Select) {
+                if (hasSelectedElements && currentTool != opticsketch::ToolMode::Select) {
                     opticsketch::GizmoType gType = (currentTool == opticsketch::ToolMode::Move) ? opticsketch::GizmoType::Move :
                         (currentTool == opticsketch::ToolMode::Rotate) ? opticsketch::GizmoType::Rotate : opticsketch::GizmoType::Scale;
-                    hoveredHandle = viewport.getGizmoHoveredHandle(selectedElem, gType, viewportX, viewportY);
+                    opticsketch::Element tmpForGizmo(opticsketch::ElementType::Laser, "__gizmo_tmp");
+                    tmpForGizmo.transform.position = selectionCentroid;
+                    hoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY);
                 }
                 if (hoveredHandle >= 0 && !manipDrag.active) {
                     manipDrag.active = true;
                     manipDrag.handle = hoveredHandle;
-                    manipDrag.initialGizmoCenter = selectedElem->getWorldBoundsCenter();
-                    manipDrag.initialPosition = selectedElem->transform.position;
-                    manipDrag.initialRotation = selectedElem->transform.rotation;
-                    manipDrag.initialScale = selectedElem->transform.scale;
+                    manipDrag.initialGizmoCenter = selectionCentroid;
+                    // Store initial transforms for ALL selected elements
+                    manipDrag.initialTransforms.clear();
+                    for (auto* e : selectedElems) {
+                        manipDrag.initialTransforms.push_back({e->id, e->transform});
+                    }
+                    // For single-element rotate/scale, also store primary element state
+                    auto* primaryElem = selectedElems.empty() ? nullptr : selectedElems[0];
+                    if (primaryElem) {
+                        manipDrag.initialPosition = primaryElem->transform.position;
+                        manipDrag.initialRotation = primaryElem->transform.rotation;
+                        manipDrag.initialScale = primaryElem->transform.scale;
+                    }
                     opticsketch::Raycast::Ray startRay = opticsketch::Raycast::screenToRay(
                         viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                     glm::vec3 axisDir;
@@ -982,7 +1169,24 @@ int main() {
                         }
                     }
                 } else {
-                    if (currentTool == opticsketch::ToolMode::Select) {
+                    // Check annotation click first (annotations are 2D overlays, checked before 3D raycast)
+                    opticsketch::Annotation* clickedAnn = nullptr;
+                    for (const auto& ar : annScreenRects) {
+                        if (viewportX >= ar.rminX && viewportX <= ar.rmaxX &&
+                            viewportY >= ar.rminY && viewportY <= ar.rmaxY) {
+                            clickedAnn = scene.getAnnotation(ar.id);
+                            break;
+                        }
+                    }
+                    if (clickedAnn) {
+                        // Select/toggle the annotation
+                        if (shiftPressed) scene.toggleSelect(clickedAnn->id);
+                        else scene.selectAnnotation(clickedAnn->id);
+                        // Start annotation drag
+                        annDrag.active = true;
+                        annDrag.id = clickedAnn->id;
+                        annDrag.initPos = clickedAnn->position;
+                    } else if (currentTool == opticsketch::ToolMode::Select) {
                         // Start selection box in Select tool
                         if (!selectionBoxActive && inViewport) {
                             selectionBoxStartX = viewportX;
@@ -990,7 +1194,7 @@ int main() {
                             selectionBoxActive = true;
                         }
                     } else {
-                        // In Move/Rotate/Scale mode: click-select another object (gizmo stays with new selection)
+                        // In Move/Rotate/Scale mode: click-select (Shift=toggle, else exclusive)
                         opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
                             viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                         float closestT = std::numeric_limits<float>::max();
@@ -1006,9 +1210,8 @@ int main() {
                                 }
                             }
                         }
-                        // Also test beams (ray-to-segment distance)
                         opticsketch::Beam* closestBeam = nullptr;
-                        float beamPickThreshold = 0.3f; // world-space pick radius
+                        float beamPickThreshold = 0.3f;
                         float bestBeamDist = beamPickThreshold * beamPickThreshold;
                         for (const auto& beam : scene.getBeams()) {
                             if (!beam->visible) continue;
@@ -1019,10 +1222,14 @@ int main() {
                                 closestBeam = beam.get();
                             }
                         }
-                        // Elements take priority over beams
-                        if (closestElement) scene.selectElement(closestElement->id);
-                        else if (closestBeam) scene.selectBeam(closestBeam->id);
-                        else scene.deselectAll();
+                        if (shiftPressed) {
+                            if (closestElement) scene.toggleSelect(closestElement->id);
+                            else if (closestBeam) scene.toggleSelect(closestBeam->id);
+                        } else {
+                            if (closestElement) scene.selectElement(closestElement->id);
+                            else if (closestBeam) scene.selectBeam(closestBeam->id);
+                            else scene.deselectAll();
+                        }
                     }
                 }
             }
@@ -1048,12 +1255,12 @@ int main() {
                     return true;
                 };
                 if (dragLen > dragThreshold) {
+                    // Box-select: select ALL overlapping elements and beams
                     float rminX = std::min(selectionBoxStartX, viewportX);
                     float rmaxX = std::max(selectionBoxStartX, viewportX);
                     float rminY = std::min(selectionBoxStartY, viewportY);
                     float rmaxY = std::max(selectionBoxStartY, viewportY);
-                    opticsketch::Element* bestElem = nullptr;
-                    float bestDepth = std::numeric_limits<float>::max();
+                    if (!shiftPressed) scene.deselectAll();
                     for (const auto& elem : scene.getElements()) {
                         if (!elem->visible) continue;
                         glm::vec3 wMin, wMax;
@@ -1077,20 +1284,10 @@ int main() {
                         }
                         if (!anyVisible) continue;
                         bool overlaps = (rminX <= maxVx && rmaxX >= minVx && rminY <= maxVy && rmaxY >= minVy);
-                        if (!overlaps) continue;
-                        glm::vec3 center = elem->getWorldBoundsCenter();
-                        float depth = glm::length(center - cam.position);
-                        if (depth < bestDepth) {
-                            bestDepth = depth;
-                            bestElem = elem.get();
-                        }
+                        if (overlaps) scene.selectElement(elem->id, true);
                     }
-                    // Also test beams (project both endpoints)
-                    opticsketch::Beam* bestBeam = nullptr;
-                    float bestBeamDepth = std::numeric_limits<float>::max();
                     for (const auto& beam : scene.getBeams()) {
                         if (!beam->visible) continue;
-                        float sv, ev;
                         float svx, svy, evx, evy;
                         bool startVis = worldToViewport(beam->start, svx, svy);
                         bool endVis = worldToViewport(beam->end, evx, evy);
@@ -1098,69 +1295,82 @@ int main() {
                         float bminVx = std::min(svx, evx), bmaxVx = std::max(svx, evx);
                         float bminVy = std::min(svy, evy), bmaxVy = std::max(svy, evy);
                         bool overlaps = (rminX <= bmaxVx && rmaxX >= bminVx && rminY <= bmaxVy && rmaxY >= bminVy);
-                        if (!overlaps) continue;
-                        glm::vec3 mid = (beam->start + beam->end) * 0.5f;
-                        float depth = glm::length(mid - cam.position);
-                        if (depth < bestBeamDepth) {
-                            bestBeamDepth = depth;
-                            bestBeam = beam.get();
+                        if (overlaps) scene.selectBeam(beam->id, true);
+                    }
+                    // Include annotations in box-select
+                    for (const auto& ar : annScreenRects) {
+                        bool overlaps = (rminX <= ar.rmaxX && rmaxX >= ar.rminX && rminY <= ar.rmaxY && rmaxY >= ar.rminY);
+                        if (overlaps) scene.selectAnnotation(ar.id, true);
+                    }
+                } else {
+                    // Single click in Select mode — check annotations first, then 3D raycast
+                    opticsketch::Annotation* clickedAnnSel = nullptr;
+                    for (const auto& ar : annScreenRects) {
+                        if (selectionBoxStartX >= ar.rminX && selectionBoxStartX <= ar.rmaxX &&
+                            selectionBoxStartY >= ar.rminY && selectionBoxStartY <= ar.rmaxY) {
+                            clickedAnnSel = scene.getAnnotation(ar.id);
+                            break;
                         }
                     }
-                    // Elements take priority
-                    if (bestElem) scene.selectElement(bestElem->id);
-                    else if (bestBeam) scene.selectBeam(bestBeam->id);
-                    else scene.deselectAll();
-                } else {
-                    opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(cam, selectionBoxStartX, selectionBoxStartY, vpWidth, vpHeight);
-                    float closestT = std::numeric_limits<float>::max();
-                    opticsketch::Element* closestElement = nullptr;
-                    for (const auto& elem : scene.getElements()) {
-                        if (!elem->visible) continue;
-                        glm::mat4 transform = elem->transform.getMatrix();
-                        float t;
-                        if (opticsketch::Raycast::intersectElement(ray, elem.get(), transform, t)) {
-                            if (t > 0.0f && t < closestT) {
-                                closestT = t;
-                                closestElement = elem.get();
+                    if (clickedAnnSel) {
+                        if (shiftPressed) scene.toggleSelect(clickedAnnSel->id);
+                        else scene.selectAnnotation(clickedAnnSel->id);
+                    } else {
+                        opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(cam, selectionBoxStartX, selectionBoxStartY, vpWidth, vpHeight);
+                        float closestT = std::numeric_limits<float>::max();
+                        opticsketch::Element* closestElement = nullptr;
+                        for (const auto& elem : scene.getElements()) {
+                            if (!elem->visible) continue;
+                            glm::mat4 transform = elem->transform.getMatrix();
+                            float t;
+                            if (opticsketch::Raycast::intersectElement(ray, elem.get(), transform, t)) {
+                                if (t > 0.0f && t < closestT) {
+                                    closestT = t;
+                                    closestElement = elem.get();
+                                }
                             }
                         }
-                    }
-                    // Also test beams
-                    opticsketch::Beam* closestBeam = nullptr;
-                    float beamPickThreshold = 0.3f;
-                    float bestBeamDist = beamPickThreshold * beamPickThreshold;
-                    for (const auto& beam : scene.getBeams()) {
-                        if (!beam->visible) continue;
-                        float tRay, tSeg;
-                        float sqDist = opticsketch::Raycast::rayToSegmentSqDist(ray, beam->start, beam->end, tRay, tSeg);
-                        if (sqDist < bestBeamDist && tRay > 0.0f) {
-                            bestBeamDist = sqDist;
-                            closestBeam = beam.get();
+                        opticsketch::Beam* closestBeam = nullptr;
+                        float beamPickThreshold = 0.3f;
+                        float bestBeamDist = beamPickThreshold * beamPickThreshold;
+                        for (const auto& beam : scene.getBeams()) {
+                            if (!beam->visible) continue;
+                            float tRay, tSeg;
+                            float sqDist = opticsketch::Raycast::rayToSegmentSqDist(ray, beam->start, beam->end, tRay, tSeg);
+                            if (sqDist < bestBeamDist && tRay > 0.0f) {
+                                bestBeamDist = sqDist;
+                                closestBeam = beam.get();
+                            }
+                        }
+                        if (shiftPressed) {
+                            if (closestElement) scene.toggleSelect(closestElement->id);
+                            else if (closestBeam) scene.toggleSelect(closestBeam->id);
+                        } else {
+                            if (closestElement) scene.selectElement(closestElement->id);
+                            else if (closestBeam) scene.selectBeam(closestBeam->id);
+                            else scene.deselectAll();
                         }
                     }
-                    if (closestElement) scene.selectElement(closestElement->id);
-                    else if (closestBeam) scene.selectBeam(closestBeam->id);
-                    else scene.deselectAll();
                 }
                 selectionBoxActive = false;
             }
-            // Apply manipulator drag with current-frame viewport coords (realtime: handle = bbox centroid follows mouse)
-            if (manipDrag.active && selectedElem && app.input.leftMouseDown) {
+            // Apply manipulator drag with current-frame viewport coords (multi-select aware)
+            if (manipDrag.active && hasSelectedElements && app.input.leftMouseDown) {
                 opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
                     viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                 if (currentTool == opticsketch::ToolMode::Move) {
-                    // Accumulation from drag start: desired center = initial + total mouse movement along axis (no per-frame delta = no double transform)
+                    // Move ALL selected elements by the same delta along axis
                     int frame = ImGui::GetFrameCount();
                     if (frame != manipDrag.lastApplyFrame) {
                         manipDrag.lastApplyFrame = frame;
                         glm::vec3 axisDir;
                         float axisLen;
                         opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
-                        glm::vec3 currentCenter = selectedElem->getWorldBoundsCenter();
+                        glm::vec3 currentCenter = manipDrag.initialGizmoCenter; // use initial center for projection
                         const opticsketch::Camera& cam = viewport.getCamera();
                         glm::mat4 view = cam.getViewMatrix();
                         glm::mat4 proj = cam.getProjectionMatrix();
-                        auto worldToViewport = [&](const glm::vec3& worldPos, float& outVx, float& outVy) -> bool {
+                        auto worldToVp = [&](const glm::vec3& worldPos, float& outVx, float& outVy) -> bool {
                             glm::vec4 clip = proj * view * glm::vec4(worldPos, 1.0f);
                             if (clip.w <= 0.0f) return false;
                             float ndcX = clip.x / clip.w;
@@ -1170,8 +1380,8 @@ int main() {
                             return true;
                         };
                         float vx0, vy0, vx1, vy1;
-                        if (worldToViewport(currentCenter, vx0, vy0) &&
-                            worldToViewport(currentCenter + axisDir, vx1, vy1)) {
+                        if (worldToVp(currentCenter, vx0, vy0) &&
+                            worldToVp(currentCenter + axisDir, vx1, vy1)) {
                             float dx = vx1 - vx0;
                             float dy = vy1 - vy0;
                             float axisScreenLen = std::sqrt(dx * dx + dy * dy);
@@ -1182,57 +1392,101 @@ int main() {
                                 float totalPixelAlongAxis = (viewportX - manipDrag.initialViewportX) * axisScreenX +
                                                            (viewportY - manipDrag.initialViewportY) * axisScreenY;
                                 float worldTotal = totalPixelAlongAxis / axisScreenLen;
-                                glm::vec3 newCenter = manipDrag.initialGizmoCenter + axisDir * worldTotal;
-                                glm::vec3 localCenter = selectedElem->getLocalBoundsCenter();
-                                glm::vec3 offset = glm::vec3(manipDrag.initialRotation * glm::vec4(manipDrag.initialScale * localCenter, 0.0f));
-                                selectedElem->transform.position = newCenter - offset;
+                                glm::vec3 delta = axisDir * worldTotal;
+
+                                // Apply snap to grid if enabled
+                                if (sceneStyle.snapToGrid && sceneStyle.gridSpacing > 0.01f) {
+                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                    float gs = sceneStyle.gridSpacing;
+                                    glm::vec3 snapped(
+                                        std::round(newCenter.x / gs) * gs,
+                                        std::round(newCenter.y / gs) * gs,
+                                        std::round(newCenter.z / gs) * gs
+                                    );
+                                    delta = snapped - manipDrag.initialGizmoCenter;
+                                }
+
+                                // Snap to nearest non-selected element center along active axis
+                                if (sceneStyle.snapToElement && sceneStyle.elementSnapRadius > 0.0f) {
+                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                    float bestDist = sceneStyle.elementSnapRadius;
+                                    float bestVal = 0.0f;
+                                    bool found = false;
+                                    int ax = manipDrag.handle;
+                                    for (const auto& elem : scene.getElements()) {
+                                        if (!elem->visible || scene.isSelected(elem->id)) continue;
+                                        float ec = (ax == 0) ? elem->transform.position.x : (ax == 1) ? elem->transform.position.y : elem->transform.position.z;
+                                        float nc = (ax == 0) ? newCenter.x : (ax == 1) ? newCenter.y : newCenter.z;
+                                        float d = std::abs(ec - nc);
+                                        if (d < bestDist) { bestDist = d; bestVal = ec; found = true; }
+                                    }
+                                    if (found) {
+                                        if (ax == 0) delta.x = bestVal - manipDrag.initialGizmoCenter.x;
+                                        else if (ax == 1) delta.y = bestVal - manipDrag.initialGizmoCenter.y;
+                                        else delta.z = bestVal - manipDrag.initialGizmoCenter.z;
+                                    }
+                                }
+
+                                // Apply delta to each selected element from its initial position
+                                for (auto& [id, initT] : manipDrag.initialTransforms) {
+                                    auto* e = scene.getElement(id);
+                                    if (e) e->transform.position = initT.position + delta;
+                                }
                             }
                         }
                         manipDrag.lastViewportX = viewportX;
                         manipDrag.lastViewportY = viewportY;
                     }
                 } else if (currentTool == opticsketch::ToolMode::Rotate) {
+                    // Rotate: apply to first selected element only (single-element behavior)
                     int frame = ImGui::GetFrameCount();
                     if (frame != manipDrag.lastApplyFrame) {
                         manipDrag.lastApplyFrame = frame;
-                        glm::vec3 axisDir;
-                        float radius;
-                        opticsketch::Gizmo::getRotateAxis(manipDrag.handle, axisDir, radius);
-                        float t;
-                        if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, axisDir, t)) {
-                            glm::vec3 hit = ray.origin + t * ray.direction;
-                            glm::vec3 toHit = hit - manipDrag.initialGizmoCenter;
-                            glm::vec3 viewDir = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
-                            glm::vec3 refRight = glm::normalize(glm::cross(axisDir, viewDir));
-                            glm::vec3 refUp = glm::cross(axisDir, refRight);
-                            float currentAngle = std::atan2(glm::dot(toHit, refUp), glm::dot(toHit, refRight));
-                            float deltaAngle = currentAngle - manipDrag.initialAngle;
-                            selectedElem->transform.rotation = glm::rotate(manipDrag.initialRotation, deltaAngle, axisDir);
-                            glm::vec3 localCenter = selectedElem->getLocalBoundsCenter();
-                            glm::vec3 offset = glm::vec3(selectedElem->transform.rotation * glm::vec4(selectedElem->transform.scale * localCenter, 0.0f));
-                            selectedElem->transform.position = manipDrag.initialGizmoCenter - offset;
+                        auto* primaryElem = selectedElems.empty() ? nullptr : selectedElems[0];
+                        if (primaryElem) {
+                            glm::vec3 axisDir;
+                            float radius;
+                            opticsketch::Gizmo::getRotateAxis(manipDrag.handle, axisDir, radius);
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, axisDir, t)) {
+                                glm::vec3 hit = ray.origin + t * ray.direction;
+                                glm::vec3 toHit = hit - manipDrag.initialGizmoCenter;
+                                glm::vec3 viewDir = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
+                                glm::vec3 refRight = glm::normalize(glm::cross(axisDir, viewDir));
+                                glm::vec3 refUp = glm::cross(axisDir, refRight);
+                                float currentAngle = std::atan2(glm::dot(toHit, refUp), glm::dot(toHit, refRight));
+                                float deltaAngle = currentAngle - manipDrag.initialAngle;
+                                primaryElem->transform.rotation = glm::rotate(manipDrag.initialRotation, deltaAngle, axisDir);
+                                glm::vec3 localCenter = primaryElem->getLocalBoundsCenter();
+                                glm::vec3 offset = glm::vec3(primaryElem->transform.rotation * glm::vec4(primaryElem->transform.scale * localCenter, 0.0f));
+                                primaryElem->transform.position = manipDrag.initialGizmoCenter - offset;
+                            }
                         }
                     }
                 } else if (currentTool == opticsketch::ToolMode::Scale) {
+                    // Scale: apply to first selected element only (single-element behavior)
                     int frame = ImGui::GetFrameCount();
                     if (frame != manipDrag.lastApplyFrame) {
                         manipDrag.lastApplyFrame = frame;
-                        glm::vec3 axisDir;
-                        float axisLen;
-                        opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
-                        float t;
-                        if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
-                            glm::vec3 P = ray.origin + t * ray.direction;
-                            float signedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
-                            float delta = signedDist - manipDrag.initialSignedDist;
-                            glm::vec3 s = manipDrag.initialScale;
-                            if (manipDrag.handle == 0) selectedElem->transform.scale.x = s.x * (1.0f + delta);
-                            else if (manipDrag.handle == 1) selectedElem->transform.scale.y = s.y * (1.0f + delta);
-                            else selectedElem->transform.scale.z = s.z * (1.0f + delta);
-                            selectedElem->transform.scale = glm::max(selectedElem->transform.scale, glm::vec3(0.01f));
-                            glm::vec3 localCenter = selectedElem->getLocalBoundsCenter();
-                            glm::vec3 offset = glm::vec3(selectedElem->transform.rotation * glm::vec4(selectedElem->transform.scale * localCenter, 0.0f));
-                            selectedElem->transform.position = manipDrag.initialGizmoCenter - offset;
+                        auto* primaryElem = selectedElems.empty() ? nullptr : selectedElems[0];
+                        if (primaryElem) {
+                            glm::vec3 axisDir;
+                            float axisLen;
+                            opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                glm::vec3 P = ray.origin + t * ray.direction;
+                                float signedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
+                                float delta = signedDist - manipDrag.initialSignedDist;
+                                glm::vec3 s = manipDrag.initialScale;
+                                if (manipDrag.handle == 0) primaryElem->transform.scale.x = s.x * (1.0f + delta);
+                                else if (manipDrag.handle == 1) primaryElem->transform.scale.y = s.y * (1.0f + delta);
+                                else primaryElem->transform.scale.z = s.z * (1.0f + delta);
+                                primaryElem->transform.scale = glm::max(primaryElem->transform.scale, glm::vec3(0.01f));
+                                glm::vec3 localCenter = primaryElem->getLocalBoundsCenter();
+                                glm::vec3 offset = glm::vec3(primaryElem->transform.rotation * glm::vec4(primaryElem->transform.scale * localCenter, 0.0f));
+                                primaryElem->transform.position = manipDrag.initialGizmoCenter - offset;
+                            }
                         }
                     }
                 }
@@ -1242,16 +1496,15 @@ int main() {
             viewport.beginFrame();
             viewport.renderGrid(25.0f, 100);
             viewport.renderScene(&scene);
-            viewport.renderBeams(&scene, scene.getSelectedBeam());
+            viewport.renderBeams(&scene);
             
             // Render preview beam if drawing (using the previewBeam declared earlier)
             if (currentTool == opticsketch::ToolMode::DrawBeam && beamStartPlaced && previewBeamPtr) {
                 viewport.renderBeam(*previewBeamPtr);
             }
             
-            // Render gizmo if element is selected and tool is not Select (hovered axis highlighted from previous frame)
-            if (scene.getSelectedElement() && toolboxPanel.getCurrentTool() != opticsketch::ToolMode::Select) {
-                // Only show single axis while actually dragging; when user releases, show all axes again
+            // Render gizmo if element(s) selected and tool is not Select
+            if (hasSelectedElements && toolboxPanel.getCurrentTool() != opticsketch::ToolMode::Select) {
                 if (!app.input.leftMouseDown) manipDrag.active = false;
                 int exclusiveHandle = -1;
                 if (manipDrag.active && app.input.leftMouseDown) exclusiveHandle = manipDrag.handle;
@@ -1270,7 +1523,8 @@ int main() {
                         gizmoType = opticsketch::GizmoType::Move;
                         break;
                 }
-                viewport.renderGizmo(&scene, gizmoType, lastGizmoHoveredHandle, exclusiveHandle);
+                // Use centroid for gizmo placement (works for both single and multi-select)
+                viewport.renderGizmoAt(selectionCentroid, gizmoType, lastGizmoHoveredHandle, exclusiveHandle);
             }
             
             viewport.endFrame();
@@ -1352,6 +1606,43 @@ int main() {
                     dl->AddRectFilled(ImVec2(lx - 3, ly - 1), ImVec2(lx + textSz.x + 3, ly + textSz.y + 1),
                                       IM_COL32(20, 20, 25, 180), 3.0f);
                     dl->AddText(ImVec2(lx, ly), IM_COL32(220, 220, 230, 255), labelText);
+                }
+            }
+
+            // --- Annotation billboard overlays ---
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                glm::mat4 vpMat = viewport.getCamera().getProjectionMatrix() * viewport.getCamera().getViewMatrix();
+                for (const auto& ann : scene.getAnnotations()) {
+                    if (!ann->visible) continue;
+                    glm::vec4 clip = vpMat * glm::vec4(ann->position, 1.0f);
+                    if (clip.w <= 0.0f) continue;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    float sx = imageMin.x + (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+                    float sy = imageMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportSize.y;
+                    if (sx < imageMin.x || sx > imageMin.x + viewportSize.x ||
+                        sy < imageMin.y || sy > imageMin.y + viewportSize.y) continue;
+
+                    const char* annText = ann->text.c_str();
+                    ImVec2 textSz = ImGui::CalcTextSize(annText);
+                    float px = 6.0f, py = 4.0f;
+                    float lx = sx - textSz.x * 0.5f;
+                    float ly = sy - textSz.y * 0.5f;
+                    ImVec2 rmin(lx - px, ly - py);
+                    ImVec2 rmax(lx + textSz.x + px, ly + textSz.y + py);
+
+                    bool isSel = scene.isSelected(ann->id);
+                    ImU32 bgColor = IM_COL32(
+                        (int)(ann->color.r * 255), (int)(ann->color.g * 255),
+                        (int)(ann->color.b * 255), 200);
+                    dl->AddRectFilled(rmin, rmax, bgColor, 5.0f);
+                    if (isSel) {
+                        dl->AddRect(rmin, rmax, IM_COL32(255, 255, 100, 255), 5.0f, 0, 2.0f);
+                    }
+                    dl->AddText(ImVec2(lx, ly), IM_COL32(20, 20, 25, 255), annText);
+
+                    // Store screen rect for click-selection (use annotation's id hash as identifier)
+                    // We handle click detection below
                 }
             }
 
@@ -1476,6 +1767,9 @@ int main() {
         glfwSwapBuffers(window);
     }
     
+    // Save keyboard shortcuts on exit
+    shortcutMgr.saveToFile("opticsketch_keys.ini");
+
     // Cleanup - must happen before destroying OpenGL context
     // Make sure OpenGL context is still current
     glfwMakeContextCurrent(window);

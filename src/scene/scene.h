@@ -4,51 +4,74 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 namespace opticsketch {
 
-// Forward declaration
+// Forward declarations
 class Beam;
+class Annotation;
 
 class Scene {
 public:
     Scene();
     ~Scene();
-    
+
     // Add element to scene
     void addElement(std::unique_ptr<Element> element);
-    
+
     // Remove element by ID
     bool removeElement(const std::string& id);
-    
+
     // Get element by ID
     Element* getElement(const std::string& id);
-    
+
     // Get all elements
     const std::vector<std::unique_ptr<Element>>& getElements() const { return elements; }
-    
+
     // Beam management
     void addBeam(std::unique_ptr<Beam> beam);
     bool removeBeam(const std::string& id);
     Beam* getBeam(const std::string& id);
     const std::vector<std::unique_ptr<Beam>>& getBeams() const { return beams; }
-    
+
+    // Annotation management
+    void addAnnotation(std::unique_ptr<Annotation> annotation);
+    bool removeAnnotation(const std::string& id);
+    Annotation* getAnnotation(const std::string& id);
+    const std::vector<std::unique_ptr<Annotation>>& getAnnotations() const { return annotations; }
+
     // Clear scene
     void clear();
-    
-    // Selection (mutual exclusion: selecting an element deselects beam and vice versa)
-    void selectElement(const std::string& id);
-    void selectBeam(const std::string& id);
+
+    // Selection — supports multi-select via unordered_set of IDs
+    // additive=false clears selection first; additive=true adds to existing selection
+    void selectElement(const std::string& id, bool additive = false);
+    void selectBeam(const std::string& id, bool additive = false);
+    void selectAnnotation(const std::string& id, bool additive = false);
+    void toggleSelect(const std::string& id);
     void deselectAll();
-    Element* getSelectedElement() const { return selectedElement; }
-    Beam* getSelectedBeam() const { return selectedBeam; }
     bool isSelected(const std::string& id) const;
+    size_t getSelectionCount() const { return selectedIds.size(); }
+
+    // Get all selected elements/beams/annotations
+    std::vector<Element*> getSelectedElements() const;
+    std::vector<Beam*> getSelectedBeams() const;
+    std::vector<Annotation*> getSelectedAnnotations() const;
+    Annotation* getSelectedAnnotation() const;
+
+    // Backward compat: returns first selected element/beam or nullptr
+    Element* getSelectedElement() const;
+    Beam* getSelectedBeam() const;
+
+    // Select all
+    void selectAll();
 
 private:
     std::vector<std::unique_ptr<Element>> elements;
     std::vector<std::unique_ptr<Beam>> beams;
-    Element* selectedElement = nullptr;
-    Beam* selectedBeam = nullptr;
+    std::vector<std::unique_ptr<Annotation>> annotations;
+    std::unordered_set<std::string> selectedIds;
 };
 
 } // namespace opticsketch

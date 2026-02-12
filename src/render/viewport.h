@@ -8,6 +8,7 @@
 #include "camera/camera.h"
 #include "render/shader.h"
 #include "render/gizmo.h"
+#include "style/scene_style.h"
 
 namespace opticsketch {
 
@@ -44,8 +45,8 @@ public:
     // Render scene elements. If forExport is true, no selection highlight or wireframe (for PNG export).
     void renderScene(Scene* scene, bool forExport = false);
     
-    // Render beams (selectedBeam is highlighted)
-    void renderBeams(Scene* scene, const Beam* selectedBeam = nullptr);
+    // Render beams (selection state read from scene)
+    void renderBeams(Scene* scene);
     
     // Render a single beam (for preview)
     void renderBeam(const Beam& beam);
@@ -53,6 +54,9 @@ public:
     // Render gizmo for selected element; hoveredHandle: 0=X, 1=Y, 2=Z, -1=none (highlights that axis).
     // exclusiveHandle: when >= 0 (e.g. while dragging), only that axis is drawn.
     void renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
+
+    // Render gizmo at an arbitrary world-space center (for multi-select centroid, etc.)
+    void renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle = -1, int exclusiveHandle = -1);
     
     // Gizmo picking: returns 0=X, 1=Y, 2=Z, -1=none. viewportX/Y relative to viewport.
     int getGizmoHoveredHandle(Element* selectedElement, GizmoType gizmoType,
@@ -61,6 +65,10 @@ public:
     // Get texture ID for ImGui display
     GLuint getTextureId() const { return textureId; }
     
+    // Style
+    void setStyle(SceneStyle* s) { style = s; }
+    SceneStyle* getStyle() const { return style; }
+
     // Get camera reference
     Camera& getCamera() { return camera; }
     const Camera& getCamera() const { return camera; }
@@ -84,6 +92,7 @@ private:
     GLuint renderbufferId = 0;
     
     Camera camera;
+    SceneStyle* style = nullptr;
     Shader gridShader;
     Gizmo* gizmo = nullptr;
     

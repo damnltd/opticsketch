@@ -190,6 +190,11 @@ add_executable(${PROJECT_NAME}
     src/export/export_png.cpp
     src/elements/element.cpp
     src/elements/basic_elements.cpp
+    src/elements/annotation.cpp
+    src/style/scene_style.cpp
+    src/input/shortcut_manager.cpp
+    src/ui/style_editor_panel.cpp
+    src/ui/shortcuts_panel.cpp
     src/scene/scene.cpp
     src/project/project.cpp
 )

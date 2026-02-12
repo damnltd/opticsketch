@@ -1,5 +1,6 @@
 #include "undo/undo.h"
 #include "scene/scene.h"
+#include "elements/annotation.h"
 
 namespace opticsketch {
 
@@ -11,6 +12,7 @@ static std::unique_ptr<Element> snapshotElement(const Element& e) {
     s->transform = e.transform;
     s->locked = e.locked;
     s->visible = e.visible;
+    s->showLabel = e.showLabel;
     s->layer = e.layer;
     s->boundsMin = e.boundsMin;
     s->boundsMax = e.boundsMax;
@@ -136,6 +138,99 @@ void RemoveBeamCmd::undo(Scene& scene) {
 
 void RemoveBeamCmd::redo(Scene& scene) {
     scene.removeBeam(beamId);
+}
+
+// --- Helper: snapshot annotation ---
+
+static std::unique_ptr<Annotation> snapshotAnnotation(const Annotation& a) {
+    auto s = std::make_unique<Annotation>(a.id);
+    s->label = a.label;
+    s->text = a.text;
+    s->position = a.position;
+    s->color = a.color;
+    s->fontSize = a.fontSize;
+    s->visible = a.visible;
+    s->layer = a.layer;
+    return s;
+}
+
+// --- AddAnnotationCmd ---
+
+AddAnnotationCmd::AddAnnotationCmd(const Annotation& ann)
+    : snapshot(snapshotAnnotation(ann)), annotationId(ann.id) {}
+
+void AddAnnotationCmd::undo(Scene& scene) {
+    scene.removeAnnotation(annotationId);
+}
+
+void AddAnnotationCmd::redo(Scene& scene) {
+    scene.addAnnotation(snapshotAnnotation(*snapshot));
+    scene.selectAnnotation(annotationId);
+}
+
+// --- RemoveAnnotationCmd ---
+
+RemoveAnnotationCmd::RemoveAnnotationCmd(const Annotation& ann)
+    : snapshot(snapshotAnnotation(ann)), annotationId(ann.id) {}
+
+void RemoveAnnotationCmd::undo(Scene& scene) {
+    scene.addAnnotation(snapshotAnnotation(*snapshot));
+    scene.selectAnnotation(annotationId);
+}
+
+void RemoveAnnotationCmd::redo(Scene& scene) {
+    scene.removeAnnotation(annotationId);
+}
+
+// --- MoveAnnotationCmd ---
+
+MoveAnnotationCmd::MoveAnnotationCmd(const std::string& annId, const glm::vec3& oldPos, const glm::vec3& newPos)
+    : annotationId(annId), oldPosition(oldPos), newPosition(newPos) {}
+
+void MoveAnnotationCmd::undo(Scene& scene) {
+    Annotation* a = scene.getAnnotation(annotationId);
+    if (a) a->position = oldPosition;
+}
+
+void MoveAnnotationCmd::redo(Scene& scene) {
+    Annotation* a = scene.getAnnotation(annotationId);
+    if (a) a->position = newPosition;
+}
+
+// --- CompoundUndoCmd ---
+
+void CompoundUndoCmd::addCommand(std::unique_ptr<UndoCommand> cmd) {
+    cmds.push_back(std::move(cmd));
+}
+
+void CompoundUndoCmd::undo(Scene& scene) {
+    for (int i = static_cast<int>(cmds.size()) - 1; i >= 0; --i)
+        cmds[i]->undo(scene);
+}
+
+void CompoundUndoCmd::redo(Scene& scene) {
+    for (auto& cmd : cmds)
+        cmd->redo(scene);
+}
+
+// --- MultiTransformCmd ---
+
+MultiTransformCmd::MultiTransformCmd(std::vector<std::pair<std::string, Transform>> oldTs,
+                                     std::vector<std::pair<std::string, Transform>> newTs)
+    : oldTransforms(std::move(oldTs)), newTransforms(std::move(newTs)) {}
+
+void MultiTransformCmd::undo(Scene& scene) {
+    for (auto& [id, t] : oldTransforms) {
+        Element* e = scene.getElement(id);
+        if (e) e->transform = t;
+    }
+}
+
+void MultiTransformCmd::redo(Scene& scene) {
+    for (auto& [id, t] : newTransforms) {
+        Element* e = scene.getElement(id);
+        if (e) e->transform = t;
+    }
 }
 
 } // namespace opticsketch

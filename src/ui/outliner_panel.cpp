@@ -1,6 +1,7 @@
 #include "ui/outliner_panel.h"
 #include "scene/scene.h"
 #include "elements/element.h"
+#include "elements/annotation.h"
 #include "render/beam.h"
 
 namespace opticsketch {
@@ -37,15 +38,14 @@ void OutlinerPanel::render(Scene* scene) {
     ImGui::Separator();
 
     const auto& elements = scene->getElements();
-    Element* selected = scene->getSelectedElement();
 
-    if (elements.empty() && scene->getBeams().empty()) {
+    if (elements.empty() && scene->getBeams().empty() && scene->getAnnotations().empty()) {
         ImGui::TextDisabled("(no objects)");
     } else {
         for (const auto& elem : elements) {
             if (!elem) continue;
 
-            bool isSelected = (selected == elem.get());
+            bool isSelected = scene->isSelected(elem->id);
             if (isSelected) {
                 ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
@@ -59,7 +59,8 @@ void OutlinerPanel::render(Scene* scene) {
             if (isSelected) ImGui::PopStyleColor(2);
 
             if (clicked) {
-                scene->selectElement(elem->id);
+                if (ImGui::GetIO().KeyShift) scene->toggleSelect(elem->id);
+                else scene->selectElement(elem->id);
             }
 
             if (ImGui::IsItemHovered()) {
@@ -72,11 +73,10 @@ void OutlinerPanel::render(Scene* scene) {
 
         // Beams
         const auto& beams = scene->getBeams();
-        Beam* selectedBeam = scene->getSelectedBeam();
         for (const auto& beam : beams) {
             if (!beam) continue;
 
-            bool isSelected = (selectedBeam == beam.get());
+            bool isSelected = scene->isSelected(beam->id);
             if (isSelected) {
                 ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
@@ -90,13 +90,45 @@ void OutlinerPanel::render(Scene* scene) {
             if (isSelected) ImGui::PopStyleColor(2);
 
             if (clicked) {
-                scene->selectBeam(beam->id);
+                if (ImGui::GetIO().KeyShift) scene->toggleSelect(beam->id);
+                else scene->selectBeam(beam->id);
             }
 
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip();
                 ImGui::Text("%s", beam->label.c_str());
                 ImGui::TextDisabled("Beam | %s", beam->id.c_str());
+                ImGui::EndTooltip();
+            }
+        }
+
+        // Annotations
+        const auto& annotations = scene->getAnnotations();
+        for (const auto& ann : annotations) {
+            if (!ann) continue;
+
+            bool isSelected = scene->isSelected(ann->id);
+            if (isSelected) {
+                ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyle().Colors[ImGuiCol_HeaderActive]);
+            }
+            bool clicked = ImGui::Selectable(
+                ann->label.empty() ? ann->id.c_str() : ann->label.c_str(),
+                isSelected,
+                0,
+                ImVec2(0, 0)
+            );
+            if (isSelected) ImGui::PopStyleColor(2);
+
+            if (clicked) {
+                if (ImGui::GetIO().KeyShift) scene->toggleSelect(ann->id);
+                else scene->selectAnnotation(ann->id);
+            }
+
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("%s", ann->label.c_str());
+                ImGui::TextDisabled("Annotation | %s", ann->id.c_str());
                 ImGui::EndTooltip();
             }
         }

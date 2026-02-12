@@ -114,30 +114,22 @@ uniform vec3 uColor;
 uniform float uAlpha;
 uniform vec3 uLightPos;
 uniform vec3 uViewPos;
+uniform float uAmbientStrength = 0.14;
+uniform float uSpecularStrength = 0.55;
+uniform float uShininess = 48.0;
 void main() {
     vec3 norm = normalize(Normal);
     vec3 viewDir = normalize(uViewPos - FragPos);
-    
-    // Key light
     vec3 lightDir = normalize(uLightPos - FragPos);
     float diff = max(dot(norm, lightDir), 0.0);
     vec3 diffuse = diff * vec3(1.0, 1.0, 1.0);
-    
-    // Fill light (opposite side) - gives roundness, less flat
     vec3 fillDir = normalize(-uLightPos - FragPos);
     float fillDiff = max(dot(norm, fillDir), 0.0);
     vec3 fillLight = fillDiff * vec3(0.4, 0.45, 0.5);
-    
-    // Ambient - low so shading is visible
-    float ambientStrength = 0.14;
-    vec3 ambient = ambientStrength * vec3(1.0, 1.0, 1.0);
-    
-    // Specular (Blinn-Phong)
+    vec3 ambient = uAmbientStrength * vec3(1.0, 1.0, 1.0);
     vec3 halfDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(norm, halfDir), 0.0), 48.0);
-    float specularStrength = 0.55;
-    vec3 specular = specularStrength * spec * vec3(1.0, 1.0, 1.0);
-    
+    float spec = pow(max(dot(norm, halfDir), 0.0), uShininess);
+    vec3 specular = uSpecularStrength * spec * vec3(1.0, 1.0, 1.0);
     vec3 result = (ambient + diffuse + fillLight + specular) * uColor;
     result = result / (1.0 + 0.15 * length(result));
     FragColor = vec4(result, uAlpha);
@@ -207,9 +199,10 @@ void Viewport::destroyFramebuffer() {
 void Viewport::beginFrame() {
     glBindFramebuffer(GL_FRAMEBUFFER, framebufferId);
     glViewport(0, 0, width, height);
-    
-    // Clear
-    glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
+
+    // Clear with style background color
+    glm::vec3 bg = style ? style->bgColor : glm::vec3(0.05f, 0.05f, 0.06f);
+    glClearColor(bg.r, bg.g, bg.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
     // Enable depth testing and face culling for solid rendering
@@ -309,8 +302,8 @@ void Viewport::renderGrid(float spacing, int gridSize) {
     gridShader.setMat3("uNormalMatrix", glm::mat3(1.0f));
     gridShader.setVec3("uLightPos", camera.position);
     gridShader.setVec3("uViewPos", camera.position);
-    gridShader.setVec3("uColor", glm::vec3(0.3f, 0.3f, 0.35f));
-    gridShader.setFloat("uAlpha", 0.5f);
+    gridShader.setVec3("uColor", style ? style->gridColor : glm::vec3(0.3f, 0.3f, 0.35f));
+    gridShader.setFloat("uAlpha", style ? style->gridAlpha : 0.5f);
     
     glLineWidth(1.0f);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size() / 6));
@@ -1001,6 +994,10 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
     gridShader.use();
     gridShader.setMat4("uView", camera.getViewMatrix());
     gridShader.setMat4("uProjection", camera.getProjectionMatrix());
+    // Set lighting uniforms from style
+    gridShader.setFloat("uAmbientStrength", style ? style->ambientStrength : 0.14f);
+    gridShader.setFloat("uSpecularStrength", style ? style->specularStrength : 0.55f);
+    gridShader.setFloat("uShininess", style ? style->specularShininess : 48.0f);
 
     for (const auto& elem : scene->getElements()) {
         if (!elem->visible) continue;
@@ -1013,21 +1010,25 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
         CachedMesh* solidMesh = nullptr;
 
         int typeIdx = static_cast<int>(elem->type);
-        switch (elem->type) {
-            case ElementType::Laser:        color = glm::vec3(1.0f, 0.2f, 0.2f); break;
-            case ElementType::Mirror:       color = glm::vec3(0.8f, 0.8f, 0.9f); break;
-            case ElementType::Lens:         color = glm::vec3(0.7f, 0.9f, 1.0f); break;
-            case ElementType::BeamSplitter: color = glm::vec3(0.9f, 0.9f, 0.7f); break;
-            case ElementType::Detector:     color = glm::vec3(0.2f, 1.0f, 0.2f); break;
-            case ElementType::Filter:       color = glm::vec3(0.6f, 0.4f, 0.8f); break;
-            case ElementType::Aperture:     color = glm::vec3(0.8f, 0.6f, 0.3f); break;
-            case ElementType::Prism:        color = glm::vec3(0.5f, 0.8f, 0.9f); break;
-            case ElementType::PrismRA:      color = glm::vec3(0.5f, 0.8f, 0.9f); break;
-            case ElementType::Grating:      color = glm::vec3(0.7f, 0.5f, 0.3f); break;
-            case ElementType::FiberCoupler: color = glm::vec3(1.0f, 0.6f, 0.2f); break;
-            case ElementType::Screen:       color = glm::vec3(0.3f, 0.8f, 0.3f); break;
-            case ElementType::Mount:        color = glm::vec3(0.5f, 0.5f, 0.55f); break;
-            case ElementType::ImportedMesh: color = glm::vec3(0.7f, 0.7f, 0.7f); break;
+        if (style && typeIdx >= 0 && typeIdx < kElementTypeCount) {
+            color = style->elementColors[typeIdx];
+        } else {
+            switch (elem->type) {
+                case ElementType::Laser:        color = glm::vec3(1.0f, 0.2f, 0.2f); break;
+                case ElementType::Mirror:       color = glm::vec3(0.8f, 0.8f, 0.9f); break;
+                case ElementType::Lens:         color = glm::vec3(0.7f, 0.9f, 1.0f); break;
+                case ElementType::BeamSplitter: color = glm::vec3(0.9f, 0.9f, 0.7f); break;
+                case ElementType::Detector:     color = glm::vec3(0.2f, 1.0f, 0.2f); break;
+                case ElementType::Filter:       color = glm::vec3(0.6f, 0.4f, 0.8f); break;
+                case ElementType::Aperture:     color = glm::vec3(0.8f, 0.6f, 0.3f); break;
+                case ElementType::Prism:        color = glm::vec3(0.5f, 0.8f, 0.9f); break;
+                case ElementType::PrismRA:      color = glm::vec3(0.5f, 0.8f, 0.9f); break;
+                case ElementType::Grating:      color = glm::vec3(0.7f, 0.5f, 0.3f); break;
+                case ElementType::FiberCoupler: color = glm::vec3(1.0f, 0.6f, 0.2f); break;
+                case ElementType::Screen:       color = glm::vec3(0.3f, 0.8f, 0.3f); break;
+                case ElementType::Mount:        color = glm::vec3(0.5f, 0.5f, 0.55f); break;
+                case ElementType::ImportedMesh: color = glm::vec3(0.7f, 0.7f, 0.7f); break;
+            }
         }
 
         if (elem->type == ElementType::ImportedMesh) {
@@ -1043,8 +1044,8 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
             solidMesh = &prototypeGeometry[typeIdx];
         }
 
-        bool isSelected = !forExport && (scene->getSelectedElement() == elem.get());
-        if (isSelected) color = color * 1.3f;
+        bool isSelected = !forExport && scene->isSelected(elem->id);
+        if (isSelected) color = color * (style ? style->selectionBrightness : 1.3f);
 
         glm::mat3 normalMatrix = glm::mat3(glm::transpose(glm::inverse(model)));
         gridShader.setVec3("uColor", color);
@@ -1064,7 +1065,7 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
             if (wf.vao != 0) {
                 glBindVertexArray(wf.vao);
                 glLineWidth(1.4f);
-                gridShader.setVec3("uColor", glm::vec3(0.2f, 1.0f, 0.2f));
+                gridShader.setVec3("uColor", style ? style->wireframeColor : glm::vec3(0.2f, 1.0f, 0.2f));
                 gridShader.setFloat("uAlpha", 1.0f);
                 glDrawArrays(GL_LINES, 0, wf.vertexCount);
                 glLineWidth(1.0f);
@@ -1079,7 +1080,7 @@ void Viewport::renderScene(Scene* scene, bool forExport) {
     glEnable(GL_CULL_FACE);
 }
 
-void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
+void Viewport::renderBeams(Scene* scene) {
     if (!scene) return;
 
     gridShader.use();
@@ -1109,7 +1110,7 @@ void Viewport::renderBeams(Scene* scene, const Beam* selectedBeam) {
     for (const auto& beam : scene->getBeams()) {
         if (!beam->visible) continue;
 
-        bool isSelected = (selectedBeam == beam.get());
+        bool isSelected = scene->isSelected(beam->id);
         glLineWidth(isSelected ? 4.0f : 2.0f);
 
         float vertices[12] = {
@@ -1174,6 +1175,15 @@ void Viewport::renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle,
     if (!selected) return;
     
     gizmo->render(camera, selected, gizmoType, width, height, hoveredHandle, exclusiveHandle);
+}
+
+void Viewport::renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle) {
+    if (!gizmo) return;
+
+    // Create a temporary element at the given center so we can reuse Gizmo::render
+    Element tmp(ElementType::Laser, "__gizmo_tmp");
+    tmp.transform.position = center;
+    gizmo->render(camera, &tmp, gizmoType, width, height, hoveredHandle, exclusiveHandle);
 }
 
 int Viewport::getGizmoHoveredHandle(Element* selectedElement, GizmoType gizmoType,

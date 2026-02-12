@@ -2,7 +2,9 @@
 #include "scene/scene.h"
 #include "elements/element.h"
 #include "elements/basic_elements.h"
+#include "elements/annotation.h"
 #include "render/beam.h"
+#include "style/scene_style.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <fstream>
@@ -27,6 +29,31 @@ static void trim(std::string& s) {
     s.erase(s.begin(), it);
     it = std::find_if_not(s.rbegin(), s.rend(), [](unsigned char c) { return std::isspace(c); }).base();
     s.erase(it, s.end());
+}
+
+// Encode text for single-line storage (newlines become literal \n)
+static std::string encodeText(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '\n') out += "\\n";
+        else if (c == '\\') out += "\\\\";
+        else out += c;
+    }
+    return out;
+}
+
+static std::string decodeText(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            if (s[i+1] == 'n') { out += '\n'; i++; }
+            else if (s[i+1] == '\\') { out += '\\'; i++; }
+            else out += s[i];
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
 }
 
 namespace opticsketch {
@@ -68,7 +95,7 @@ static ElementType stringToType(const std::string& s) {
     return ElementType::Laser;
 }
 
-bool saveProject(const std::string& path, Scene* scene) {
+bool saveProject(const std::string& path, Scene* scene, SceneStyle* style) {
     if (!scene) return false;
     std::ofstream f(path);
     if (!f) return false;
@@ -106,6 +133,41 @@ bool saveProject(const std::string& path, Scene* scene) {
         f << "width " << b.width << "\n";
         f << "visible " << (b.visible ? 1 : 0) << "\n";
         f << "layer " << b.layer << "\n";
+        f << "end\n";
+    }
+    // Save annotations
+    for (const auto& ann : scene->getAnnotations()) {
+        if (!ann) continue;
+        const Annotation& a = *ann;
+        f << "annotation\n";
+        f << "id " << a.id << "\n";
+        f << "label " << a.label << "\n";
+        f << "text " << encodeText(a.text) << "\n";
+        f << "position " << a.position.x << " " << a.position.y << " " << a.position.z << "\n";
+        f << "color " << a.color.x << " " << a.color.y << " " << a.color.z << "\n";
+        f << "fontsize " << a.fontSize << "\n";
+        f << "visible " << (a.visible ? 1 : 0) << "\n";
+        f << "layer " << a.layer << "\n";
+        f << "end\n";
+    }
+    // Save style
+    if (style) {
+        f << "style\n";
+        f << "bgcolor " << style->bgColor.x << " " << style->bgColor.y << " " << style->bgColor.z << "\n";
+        f << "gridcolor " << style->gridColor.x << " " << style->gridColor.y << " " << style->gridColor.z << "\n";
+        f << "gridalpha " << style->gridAlpha << "\n";
+        f << "wireframecolor " << style->wireframeColor.x << " " << style->wireframeColor.y << " " << style->wireframeColor.z << "\n";
+        f << "selbrightness " << style->selectionBrightness << "\n";
+        f << "ambient " << style->ambientStrength << "\n";
+        f << "specular " << style->specularStrength << "\n";
+        f << "shininess " << style->specularShininess << "\n";
+        for (int i = 0; i < kElementTypeCount; i++) {
+            f << "elemcolor " << i << " " << style->elementColors[i].x << " " << style->elementColors[i].y << " " << style->elementColors[i].z << "\n";
+        }
+        f << "snaptogrid " << (style->snapToGrid ? 1 : 0) << "\n";
+        f << "snapgridspacing " << style->gridSpacing << "\n";
+        f << "snaptoelem " << (style->snapToElement ? 1 : 0) << "\n";
+        f << "snapelemradius " << style->elementSnapRadius << "\n";
         f << "end\n";
     }
     f.flush();
@@ -230,7 +292,113 @@ static bool parseBeamBlock(std::istream& in, Scene* scene) {
     return true;
 }
 
-bool loadProject(const std::string& path, Scene* scene) {
+static bool parseAnnotationBlock(std::istream& in, Scene* scene) {
+    std::string id, label, text;
+    float px = 0, py = 0, pz = 0;
+    float cr = 0.95f, cg = 0.95f, cb = 0.85f;
+    float fontSize = 14.0f;
+    int visible = 1, layer = 0;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 3, "id ") == 0) {
+            id = line.substr(3);
+            trim(id);
+        } else if (line.compare(0, 6, "label ") == 0) {
+            label = line.substr(6);
+            trim(label);
+        } else if (line.compare(0, 5, "text ") == 0) {
+            text = decodeText(line.substr(5));
+        } else if (line.compare(0, 9, "position ") == 0) {
+            std::istringstream ls(line.substr(9));
+            ls >> px >> py >> pz;
+        } else if (line.compare(0, 6, "color ") == 0) {
+            std::istringstream ls(line.substr(6));
+            ls >> cr >> cg >> cb;
+        } else if (line.compare(0, 9, "fontsize ") == 0) {
+            fontSize = std::stof(line.substr(9));
+        } else if (line.compare(0, 8, "visible ") == 0) {
+            visible = std::stoi(line.substr(8));
+        } else if (line.compare(0, 6, "layer ") == 0) {
+            layer = std::stoi(line.substr(6));
+        }
+    }
+
+    auto ann = std::make_unique<Annotation>(id.empty() ? Annotation::generateId() : id);
+    ann->label = label;
+    ann->text = text;
+    ann->position = glm::vec3(px, py, pz);
+    ann->color = glm::vec3(cr, cg, cb);
+    ann->fontSize = fontSize;
+    ann->visible = (visible != 0);
+    ann->layer = layer;
+
+    scene->addAnnotation(std::move(ann));
+    return true;
+}
+
+static bool parseStyleBlock(std::istream& in, SceneStyle* style) {
+    if (!style) {
+        // Skip the block if no style pointer
+        std::string line;
+        while (std::getline(in, line)) {
+            trim(line);
+            if (line == "end") break;
+        }
+        return true;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        trim(line);
+        if (line.empty()) continue;
+        if (line == "end") break;
+
+        if (line.compare(0, 8, "bgcolor ") == 0) {
+            std::istringstream ls(line.substr(8));
+            ls >> style->bgColor.x >> style->bgColor.y >> style->bgColor.z;
+        } else if (line.compare(0, 10, "gridcolor ") == 0) {
+            std::istringstream ls(line.substr(10));
+            ls >> style->gridColor.x >> style->gridColor.y >> style->gridColor.z;
+        } else if (line.compare(0, 10, "gridalpha ") == 0) {
+            style->gridAlpha = std::stof(line.substr(10));
+        } else if (line.compare(0, 15, "wireframecolor ") == 0) {
+            std::istringstream ls(line.substr(15));
+            ls >> style->wireframeColor.x >> style->wireframeColor.y >> style->wireframeColor.z;
+        } else if (line.compare(0, 14, "selbrightness ") == 0) {
+            style->selectionBrightness = std::stof(line.substr(14));
+        } else if (line.compare(0, 8, "ambient ") == 0) {
+            style->ambientStrength = std::stof(line.substr(8));
+        } else if (line.compare(0, 9, "specular ") == 0) {
+            style->specularStrength = std::stof(line.substr(9));
+        } else if (line.compare(0, 10, "shininess ") == 0) {
+            style->specularShininess = std::stof(line.substr(10));
+        } else if (line.compare(0, 10, "elemcolor ") == 0) {
+            std::istringstream ls(line.substr(10));
+            int idx;
+            float r, g, b;
+            ls >> idx >> r >> g >> b;
+            if (idx >= 0 && idx < kElementTypeCount) {
+                style->elementColors[idx] = glm::vec3(r, g, b);
+            }
+        } else if (line.compare(0, 11, "snaptogrid ") == 0) {
+            style->snapToGrid = (std::stoi(line.substr(11)) != 0);
+        } else if (line.compare(0, 16, "snapgridspacing ") == 0) {
+            style->gridSpacing = std::stof(line.substr(16));
+        } else if (line.compare(0, 11, "snaptoelem ") == 0) {
+            style->snapToElement = (std::stoi(line.substr(11)) != 0);
+        } else if (line.compare(0, 15, "snapelemradius ") == 0) {
+            style->elementSnapRadius = std::stof(line.substr(15));
+        }
+    }
+    return true;
+}
+
+bool loadProject(const std::string& path, Scene* scene, SceneStyle* style) {
     if (!scene) return false;
     std::ifstream f(path);
     if (!f) return false;
@@ -250,6 +418,10 @@ bool loadProject(const std::string& path, Scene* scene) {
             if (!parseElementBlock(f, scene)) return false;
         } else if (line == "beam") {
             if (!parseBeamBlock(f, scene)) return false;
+        } else if (line == "annotation") {
+            if (!parseAnnotationBlock(f, scene)) return false;
+        } else if (line == "style") {
+            if (!parseStyleBlock(f, style)) return false;
         }
     }
     return true;

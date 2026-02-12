@@ -1,5 +1,6 @@
 #include "scene/scene.h"
 #include "render/beam.h"
+#include "elements/annotation.h"
 #include <algorithm>
 #include <string>
 
@@ -45,11 +46,9 @@ bool Scene::removeElement(const std::string& id) {
         [&id](const std::unique_ptr<Element>& elem) {
             return elem->id == id;
         });
-    
+
     if (it != elements.end()) {
-        if (selectedElement == it->get()) {
-            selectedElement = nullptr;
-        }
+        selectedIds.erase(id);
         elements.erase(it);
         return true;
     }
@@ -61,7 +60,7 @@ Element* Scene::getElement(const std::string& id) {
         [&id](const std::unique_ptr<Element>& elem) {
             return elem->id == id;
         });
-    
+
     return (it != elements.end()) ? it->get() : nullptr;
 }
 
@@ -77,9 +76,7 @@ bool Scene::removeBeam(const std::string& id) {
         });
 
     if (it != beams.end()) {
-        if (selectedBeam == it->get()) {
-            selectedBeam = nullptr;
-        }
+        selectedIds.erase(id);
         beams.erase(it);
         return true;
     }
@@ -91,35 +88,136 @@ Beam* Scene::getBeam(const std::string& id) {
         [&id](const std::unique_ptr<Beam>& beam) {
             return beam->id == id;
         });
-    
+
     return (it != beams.end()) ? it->get() : nullptr;
+}
+
+void Scene::addAnnotation(std::unique_ptr<Annotation> annotation) {
+    if (!annotation) return;
+    annotations.push_back(std::move(annotation));
+}
+
+bool Scene::removeAnnotation(const std::string& id) {
+    auto it = std::find_if(annotations.begin(), annotations.end(),
+        [&id](const std::unique_ptr<Annotation>& ann) {
+            return ann->id == id;
+        });
+
+    if (it != annotations.end()) {
+        selectedIds.erase(id);
+        annotations.erase(it);
+        return true;
+    }
+    return false;
+}
+
+Annotation* Scene::getAnnotation(const std::string& id) {
+    auto it = std::find_if(annotations.begin(), annotations.end(),
+        [&id](const std::unique_ptr<Annotation>& ann) {
+            return ann->id == id;
+        });
+
+    return (it != annotations.end()) ? it->get() : nullptr;
 }
 
 void Scene::clear() {
     elements.clear();
     beams.clear();
-    selectedElement = nullptr;
-    selectedBeam = nullptr;
+    annotations.clear();
+    selectedIds.clear();
 }
 
-void Scene::selectElement(const std::string& id) {
-    selectedElement = getElement(id);
-    selectedBeam = nullptr;  // mutual exclusion
+void Scene::selectElement(const std::string& id, bool additive) {
+    if (!getElement(id)) return;
+    if (!additive) selectedIds.clear();
+    selectedIds.insert(id);
 }
 
-void Scene::selectBeam(const std::string& id) {
-    selectedBeam = getBeam(id);
-    selectedElement = nullptr;  // mutual exclusion
+void Scene::selectBeam(const std::string& id, bool additive) {
+    if (!getBeam(id)) return;
+    if (!additive) selectedIds.clear();
+    selectedIds.insert(id);
+}
+
+void Scene::selectAnnotation(const std::string& id, bool additive) {
+    if (!getAnnotation(id)) return;
+    if (!additive) selectedIds.clear();
+    selectedIds.insert(id);
+}
+
+void Scene::toggleSelect(const std::string& id) {
+    if (selectedIds.count(id))
+        selectedIds.erase(id);
+    else
+        selectedIds.insert(id);
 }
 
 void Scene::deselectAll() {
-    selectedElement = nullptr;
-    selectedBeam = nullptr;
+    selectedIds.clear();
 }
 
 bool Scene::isSelected(const std::string& id) const {
-    return (selectedElement && selectedElement->id == id) ||
-           (selectedBeam && selectedBeam->id == id);
+    return selectedIds.count(id) > 0;
+}
+
+std::vector<Element*> Scene::getSelectedElements() const {
+    std::vector<Element*> result;
+    for (const auto& elem : elements) {
+        if (selectedIds.count(elem->id))
+            result.push_back(elem.get());
+    }
+    return result;
+}
+
+std::vector<Beam*> Scene::getSelectedBeams() const {
+    std::vector<Beam*> result;
+    for (const auto& beam : beams) {
+        if (selectedIds.count(beam->id))
+            result.push_back(beam.get());
+    }
+    return result;
+}
+
+Element* Scene::getSelectedElement() const {
+    for (const auto& elem : elements) {
+        if (selectedIds.count(elem->id))
+            return elem.get();
+    }
+    return nullptr;
+}
+
+Beam* Scene::getSelectedBeam() const {
+    for (const auto& beam : beams) {
+        if (selectedIds.count(beam->id))
+            return beam.get();
+    }
+    return nullptr;
+}
+
+std::vector<Annotation*> Scene::getSelectedAnnotations() const {
+    std::vector<Annotation*> result;
+    for (const auto& ann : annotations) {
+        if (selectedIds.count(ann->id))
+            result.push_back(ann.get());
+    }
+    return result;
+}
+
+Annotation* Scene::getSelectedAnnotation() const {
+    for (const auto& ann : annotations) {
+        if (selectedIds.count(ann->id))
+            return ann.get();
+    }
+    return nullptr;
+}
+
+void Scene::selectAll() {
+    for (const auto& elem : elements)
+        selectedIds.insert(elem->id);
+    for (const auto& beam : beams)
+        selectedIds.insert(beam->id);
+    for (const auto& ann : annotations)
+        selectedIds.insert(ann->id);
 }
 
 } // namespace opticsketch
