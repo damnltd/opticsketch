@@ -39,6 +39,11 @@ struct OpticalProperties {
     float apertureDiameter = 0.5f;  // fraction of bounds height (0..1) for aperture opening
     float gratingLineDensity = 600.0f; // lines/mm for diffraction grating
     glm::vec3 filterColor{1.0f};    // color multiplier for filter transmission
+    float cauchyB = 0.0f;           // Cauchy dispersion B coefficient (m^2). 0 = no dispersion.
+    // Source properties (only used when opticalType == Source)
+    int sourceRayCount = 1;         // number of rays per source (1 = single ray)
+    float sourceBeamWidth = 0.0f;   // collimated beam width in mm (0 = single ray)
+    bool sourceIsWhiteLight = false; // emit multiple wavelengths for dispersion demos
 };
 
 struct MaterialProperties {

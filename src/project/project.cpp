@@ -128,6 +128,10 @@ bool saveProject(const std::string& path, Scene* scene, SceneStyle* style) {
         f << "aperturedia " << e.optics.apertureDiameter << "\n";
         f << "gratingdensity " << e.optics.gratingLineDensity << "\n";
         f << "filtercolor " << e.optics.filterColor.x << " " << e.optics.filterColor.y << " " << e.optics.filterColor.z << "\n";
+        f << "cauchyb " << e.optics.cauchyB << "\n";
+        f << "sourceraycount " << e.optics.sourceRayCount << "\n";
+        f << "sourcebeamwidth " << e.optics.sourceBeamWidth << "\n";
+        f << "sourcewhitelight " << (e.optics.sourceIsWhiteLight ? 1 : 0) << "\n";
         // Material properties
         f << "metallic " << e.material.metallic << "\n";
         f << "roughness " << e.material.roughness << "\n";
@@ -274,6 +278,10 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     float gratingdensity = -1;
     float filterColorR = -1, filterColorG = -1, filterColorB = -1;
     bool hasFilterColor = false;
+    float cauchyb = -1;
+    int sourceraycount = -1;
+    float sourcebeamwidth = -1;
+    int sourcewhitelight = -1;
     // Material properties
     float metallic = -1, roughness = -1, transparency = -1, fresnelior = -1;
 
@@ -334,6 +342,14 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
             std::istringstream ls(line.substr(12));
             ls >> filterColorR >> filterColorG >> filterColorB;
             hasFilterColor = true;
+        } else if (line.compare(0, 8, "cauchyb ") == 0) {
+            cauchyb = std::stof(line.substr(8));
+        } else if (line.compare(0, 15, "sourceraycount ") == 0) {
+            sourceraycount = std::stoi(line.substr(15));
+        } else if (line.compare(0, 16, "sourcebeamwidth ") == 0) {
+            sourcebeamwidth = std::stof(line.substr(16));
+        } else if (line.compare(0, 17, "sourcewhitelight ") == 0) {
+            sourcewhitelight = std::stoi(line.substr(17));
         } else if (line.compare(0, 9, "metallic ") == 0) {
             metallic = std::stof(line.substr(9));
         } else if (line.compare(0, 10, "roughness ") == 0) {
@@ -374,6 +390,10 @@ static bool parseElementBlock(std::istream& in, Scene* scene) {
     if (aperturedia >= 0) elem->optics.apertureDiameter = aperturedia;
     if (gratingdensity >= 0) elem->optics.gratingLineDensity = gratingdensity;
     if (hasFilterColor) elem->optics.filterColor = glm::vec3(filterColorR, filterColorG, filterColorB);
+    if (cauchyb >= 0) elem->optics.cauchyB = cauchyb;
+    if (sourceraycount >= 0) elem->optics.sourceRayCount = sourceraycount;
+    if (sourcebeamwidth >= 0) elem->optics.sourceBeamWidth = sourcebeamwidth;
+    if (sourcewhitelight >= 0) elem->optics.sourceIsWhiteLight = (sourcewhitelight != 0);
 
     // Override material properties if specified
     if (metallic >= 0) elem->material.metallic = metallic;
@@ -744,6 +764,70 @@ bool loadProject(const std::string& path, Scene* scene, SceneStyle* style) {
         }
     }
     return true;
+}
+
+bool saveStylePreset(const std::string& path, const SceneStyle* style) {
+    if (!style) return false;
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+
+    f << "optstyle 1\n";
+    f << "style\n";
+    f << "rendermode " << static_cast<int>(style->renderMode) << "\n";
+    f << "bgcolor " << style->bgColor.x << " " << style->bgColor.y << " " << style->bgColor.z << "\n";
+    f << "gridcolor " << style->gridColor.x << " " << style->gridColor.y << " " << style->gridColor.z << "\n";
+    f << "gridalpha " << style->gridAlpha << "\n";
+    f << "wireframecolor " << style->wireframeColor.x << " " << style->wireframeColor.y << " " << style->wireframeColor.z << "\n";
+    f << "selbrightness " << style->selectionBrightness << "\n";
+    f << "ambient " << style->ambientStrength << "\n";
+    f << "specular " << style->specularStrength << "\n";
+    f << "shininess " << style->specularShininess << "\n";
+    for (int i = 0; i < kElementTypeCount; i++) {
+        f << "elemcolor " << i << " " << style->elementColors[i].x << " " << style->elementColors[i].y << " " << style->elementColors[i].z << "\n";
+    }
+    f << "snaptogrid " << (style->snapToGrid ? 1 : 0) << "\n";
+    f << "snapgridspacing " << style->gridSpacing << "\n";
+    f << "snaptoelem " << (style->snapToElement ? 1 : 0) << "\n";
+    f << "snapelemradius " << style->elementSnapRadius << "\n";
+    f << "snaptobeam " << (style->snapToBeam ? 1 : 0) << "\n";
+    f << "snapbeamradius " << style->beamSnapRadius << "\n";
+    f << "autoorientbeam " << (style->autoOrientToBeam ? 1 : 0) << "\n";
+    f << "showfocalpoints " << (style->showFocalPoints ? 1 : 0) << "\n";
+    f << "bloomthreshold " << style->bloomThreshold << "\n";
+    f << "bloomintensity " << style->bloomIntensity << "\n";
+    f << "bloomblurpasses " << style->bloomBlurPasses << "\n";
+    f << "bgmode " << static_cast<int>(style->bgMode) << "\n";
+    f << "bggradtop " << style->bgGradientTop.x << " " << style->bgGradientTop.y << " " << style->bgGradientTop.z << "\n";
+    f << "bggradbot " << style->bgGradientBottom.x << " " << style->bgGradientBottom.y << " " << style->bgGradientBottom.z << "\n";
+    if (!style->hdriPath.empty()) {
+        f << "hdripath " << style->hdriPath << "\n";
+    }
+    f << "hdriintensity " << style->hdriIntensity << "\n";
+    f << "hdrirotation " << style->hdriRotation << "\n";
+    f << "end\n";
+
+    return f.good();
+}
+
+bool loadStylePreset(const std::string& path, SceneStyle* style) {
+    if (!style) return false;
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+
+    skipBOM(f);
+
+    std::string line;
+    // Read header
+    if (!std::getline(f, line)) return false;
+    trim(line);
+    if (line != "optstyle 1") return false;
+
+    // Read style block
+    if (!std::getline(f, line)) return false;
+    trim(line);
+    if (line != "style") return false;
+
+    return parseStyleBlock(f, style);
 }
 
 } // namespace opticsketch

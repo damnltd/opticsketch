@@ -116,7 +116,7 @@ struct InputState {
 // All in world space: objects and gizmo use world position; move axes are world X/Y/Z.
 struct ManipulatorDragState {
     bool active = false;
-    int handle = -1;                  // 0=X, 1=Y, 2=Z (world axes)
+    int handle = -1;                  // GizmoHandle value (0-6)
     glm::vec3 initialGizmoCenter;     // bbox center at drag start (world)
     glm::vec3 initialPosition;
     glm::quat initialRotation;
@@ -132,6 +132,10 @@ struct ManipulatorDragState {
     int lastApplyFrame = -1;
     // Multi-select: store initial transforms for all selected elements
     std::vector<std::pair<std::string, opticsketch::Transform>> initialTransforms;
+    // Planar / center drag
+    glm::vec3 initialPlaneHit{0.0f};
+    // Local/world orientation at drag start (frozen so it doesn't change mid-drag)
+    glm::mat3 dragOrientation{1.0f};
 };
 
 // Application state
@@ -1235,6 +1239,12 @@ int main() {
                 selectionCentroid = (bboxMin + bboxMax) * 0.5f;
             }
 
+            // Compute gizmo orientation (World = identity, Local = primary element's rotation)
+            glm::mat3 gizmoOrientation(1.0f);
+            if (toolboxPanel.getGizmoSpace() == opticsketch::GizmoSpace::Local && hasSelectedElements) {
+                gizmoOrientation = glm::mat3_cast(selectedElems[0]->transform.rotation);
+            }
+
             // Pre-compute annotation screen rects for click detection and box-select
             struct AnnScreenRect { std::string id; float rminX, rminY, rmaxX, rmaxY; };
             std::vector<AnnScreenRect> annScreenRects;
@@ -1288,7 +1298,7 @@ int main() {
                 // Use a temp element at centroid for gizmo hit testing
                 opticsketch::Element tmpForGizmo(opticsketch::ElementType::Laser, "__gizmo_tmp");
                 tmpForGizmo.transform.position = selectionCentroid;
-                lastGizmoHoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY);
+                lastGizmoHoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY, gizmoOrientation);
             } else {
                 lastGizmoHoveredHandle = -1;
             }
@@ -1475,7 +1485,7 @@ int main() {
                         (currentTool == opticsketch::ToolMode::Rotate) ? opticsketch::GizmoType::Rotate : opticsketch::GizmoType::Scale;
                     opticsketch::Element tmpForGizmo(opticsketch::ElementType::Laser, "__gizmo_tmp");
                     tmpForGizmo.transform.position = selectionCentroid;
-                    hoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY);
+                    hoveredHandle = viewport.getGizmoHoveredHandle(&tmpForGizmo, gType, viewportX, viewportY, gizmoOrientation);
                 }
                 if (hoveredHandle >= 0 && !manipDrag.active) {
                     manipDrag.active = true;
@@ -1497,14 +1507,36 @@ int main() {
                         viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                     glm::vec3 axisDir;
                     float axisLenOrRadius;
+                    manipDrag.dragOrientation = gizmoOrientation; // Freeze orientation at drag start
                     if (currentTool == opticsketch::ToolMode::Move) {
-                        opticsketch::Gizmo::getMoveAxis(hoveredHandle, axisDir, axisLenOrRadius);
-                        manipDrag.initialViewportX = viewportX;
-                        manipDrag.initialViewportY = viewportY;
-                        manipDrag.lastViewportX = viewportX;
-                        manipDrag.lastViewportY = viewportY;
+                        if (hoveredHandle >= opticsketch::GizmoHandle::XY && hoveredHandle <= opticsketch::GizmoHandle::XZ) {
+                            // Planar drag: constrain to a plane
+                            glm::vec3 planeNormals[3] = { {0,0,1}, {1,0,0}, {0,1,0} }; // XY->Z, YZ->X, XZ->Y
+                            manipDrag.movePlaneNormal = manipDrag.dragOrientation * planeNormals[hoveredHandle - opticsketch::GizmoHandle::XY];
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                manipDrag.initialPlaneHit = startRay.origin + t * startRay.direction;
+                            }
+                        } else if (hoveredHandle == opticsketch::GizmoHandle::Center) {
+                            // Center free-drag: use camera view plane
+                            manipDrag.movePlaneNormal = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                manipDrag.initialPlaneHit = startRay.origin + t * startRay.direction;
+                            }
+                        } else {
+                            // Single-axis drag (handles 0, 1, 2)
+                            opticsketch::Gizmo::getMoveAxis(hoveredHandle, axisDir, axisLenOrRadius);
+                            manipDrag.initialViewportX = viewportX;
+                            manipDrag.initialViewportY = viewportY;
+                            manipDrag.lastViewportX = viewportX;
+                            manipDrag.lastViewportY = viewportY;
+                        }
                     } else if (currentTool == opticsketch::ToolMode::Rotate) {
                         opticsketch::Gizmo::getRotateAxis(hoveredHandle, axisDir, axisLenOrRadius);
+                        axisDir = manipDrag.dragOrientation * axisDir; // Apply local/world orientation
+                        manipDrag.lastViewportX = viewportX;
+                        manipDrag.lastViewportY = viewportY;
                         float t;
                         if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, axisDir, t)) {
                             glm::vec3 hit = startRay.origin + t * startRay.direction;
@@ -1515,22 +1547,34 @@ int main() {
                             manipDrag.initialAngle = std::atan2(glm::dot(toHit, refUp), glm::dot(toHit, refRight));
                         }
                     } else if (currentTool == opticsketch::ToolMode::Scale) {
-                        opticsketch::Gizmo::getMoveAxis(hoveredHandle, axisDir, axisLenOrRadius);
-                        glm::vec3 viewDir = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
-                        glm::vec3 crossVec = glm::cross(axisDir, viewDir);
-                        float len = glm::length(crossVec);
-                        if (len < 1e-5f) {
-                            if (std::abs(glm::dot(axisDir, glm::vec3(0, 1, 0))) < 0.9f)
-                                manipDrag.movePlaneNormal = glm::normalize(glm::cross(axisDir, glm::vec3(0, 1, 0)));
-                            else
-                                manipDrag.movePlaneNormal = glm::normalize(glm::cross(axisDir, glm::vec3(1, 0, 0)));
+                        if (hoveredHandle == opticsketch::GizmoHandle::Center) {
+                            // Uniform scale: use camera view plane
+                            manipDrag.movePlaneNormal = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                glm::vec3 P = startRay.origin + t * startRay.direction;
+                                manipDrag.initialSignedDist = glm::length(P - manipDrag.initialGizmoCenter);
+                            }
                         } else {
-                            manipDrag.movePlaneNormal = crossVec / len;
-                        }
-                        float t;
-                        if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
-                            glm::vec3 P = startRay.origin + t * startRay.direction;
-                            manipDrag.initialSignedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
+                            // Single-axis scale (handles 0, 1, 2)
+                            opticsketch::Gizmo::getMoveAxis(hoveredHandle, axisDir, axisLenOrRadius);
+                            axisDir = manipDrag.dragOrientation * axisDir; // Apply local/world orientation
+                            glm::vec3 viewDir = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
+                            glm::vec3 crossVec = glm::cross(axisDir, viewDir);
+                            float len = glm::length(crossVec);
+                            if (len < 1e-5f) {
+                                if (std::abs(glm::dot(axisDir, glm::vec3(0, 1, 0))) < 0.9f)
+                                    manipDrag.movePlaneNormal = glm::normalize(glm::cross(axisDir, glm::vec3(0, 1, 0)));
+                                else
+                                    manipDrag.movePlaneNormal = glm::normalize(glm::cross(axisDir, glm::vec3(1, 0, 0)));
+                            } else {
+                                manipDrag.movePlaneNormal = crossVec / len;
+                            }
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(startRay, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                glm::vec3 P = startRay.origin + t * startRay.direction;
+                                manipDrag.initialSignedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
+                            }
                         }
                     }
                 } else {
@@ -1724,105 +1768,121 @@ int main() {
                 opticsketch::Raycast::Ray ray = opticsketch::Raycast::screenToRay(
                     viewport.getCamera(), viewportX, viewportY, vpWidth, vpHeight);
                 if (currentTool == opticsketch::ToolMode::Move) {
-                    // Move ALL selected elements by the same delta along axis
+                    // Move ALL selected elements by the same delta
                     int frame = ImGui::GetFrameCount();
                     if (frame != manipDrag.lastApplyFrame) {
                         manipDrag.lastApplyFrame = frame;
-                        glm::vec3 axisDir;
-                        float axisLen;
-                        opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
-                        glm::vec3 currentCenter = manipDrag.initialGizmoCenter; // use initial center for projection
-                        const opticsketch::Camera& cam = viewport.getCamera();
-                        glm::mat4 view = cam.getViewMatrix();
-                        glm::mat4 proj = cam.getProjectionMatrix();
-                        auto worldToVp = [&](const glm::vec3& worldPos, float& outVx, float& outVy) -> bool {
-                            glm::vec4 clip = proj * view * glm::vec4(worldPos, 1.0f);
-                            if (clip.w <= 0.0f) return false;
-                            float ndcX = clip.x / clip.w;
-                            float ndcY = clip.y / clip.w;
-                            outVx = (ndcX * 0.5f + 0.5f) * vpWidth;
-                            outVy = (1.0f - (ndcY * 0.5f + 0.5f)) * vpHeight;
-                            return true;
-                        };
-                        float vx0, vy0, vx1, vy1;
-                        if (worldToVp(currentCenter, vx0, vy0) &&
-                            worldToVp(currentCenter + axisDir, vx1, vy1)) {
-                            float dx = vx1 - vx0;
-                            float dy = vy1 - vy0;
-                            float axisScreenLen = std::sqrt(dx * dx + dy * dy);
-                            if (axisScreenLen > 1e-5f) {
-                                float invLen = 1.0f / axisScreenLen;
-                                float axisScreenX = dx * invLen;
-                                float axisScreenY = dy * invLen;
-                                float totalPixelAlongAxis = (viewportX - manipDrag.initialViewportX) * axisScreenX +
-                                                           (viewportY - manipDrag.initialViewportY) * axisScreenY;
-                                float worldTotal = totalPixelAlongAxis / axisScreenLen;
-                                glm::vec3 delta = axisDir * worldTotal;
+                        glm::vec3 delta(0.0f);
+                        bool deltaComputed = false;
 
-                                // Apply snap to grid if enabled
-                                if (sceneStyle.snapToGrid && sceneStyle.gridSpacing > 0.01f) {
-                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
-                                    float gs = sceneStyle.gridSpacing;
-                                    glm::vec3 snapped(
-                                        std::round(newCenter.x / gs) * gs,
-                                        std::round(newCenter.y / gs) * gs,
-                                        std::round(newCenter.z / gs) * gs
-                                    );
-                                    delta = snapped - manipDrag.initialGizmoCenter;
+                        if (manipDrag.handle >= opticsketch::GizmoHandle::XY || manipDrag.handle == opticsketch::GizmoHandle::Center) {
+                            // Planar or center drag: ray-plane intersection
+                            float t;
+                            if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
+                                glm::vec3 currentHit = ray.origin + t * ray.direction;
+                                delta = currentHit - manipDrag.initialPlaneHit;
+                                deltaComputed = true;
+                            }
+                        } else {
+                            // Single-axis drag (handles 0, 1, 2): screen-space projection
+                            glm::vec3 axisDir;
+                            float axisLen;
+                            opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
+                            axisDir = manipDrag.dragOrientation * axisDir; // Apply local/world orientation
+                            glm::vec3 currentCenter = manipDrag.initialGizmoCenter;
+                            const opticsketch::Camera& cam = viewport.getCamera();
+                            glm::mat4 view = cam.getViewMatrix();
+                            glm::mat4 proj = cam.getProjectionMatrix();
+                            auto worldToVp = [&](const glm::vec3& worldPos, float& outVx, float& outVy) -> bool {
+                                glm::vec4 clip = proj * view * glm::vec4(worldPos, 1.0f);
+                                if (clip.w <= 0.0f) return false;
+                                float ndcX = clip.x / clip.w;
+                                float ndcY = clip.y / clip.w;
+                                outVx = (ndcX * 0.5f + 0.5f) * vpWidth;
+                                outVy = (1.0f - (ndcY * 0.5f + 0.5f)) * vpHeight;
+                                return true;
+                            };
+                            float vx0, vy0, vx1, vy1;
+                            if (worldToVp(currentCenter, vx0, vy0) &&
+                                worldToVp(currentCenter + axisDir, vx1, vy1)) {
+                                float dx = vx1 - vx0;
+                                float dy = vy1 - vy0;
+                                float axisScreenLen = std::sqrt(dx * dx + dy * dy);
+                                if (axisScreenLen > 1e-5f) {
+                                    float invLen = 1.0f / axisScreenLen;
+                                    float axisScreenX = dx * invLen;
+                                    float axisScreenY = dy * invLen;
+                                    float totalPixelAlongAxis = (viewportX - manipDrag.initialViewportX) * axisScreenX +
+                                                               (viewportY - manipDrag.initialViewportY) * axisScreenY;
+                                    float worldTotal = totalPixelAlongAxis / axisScreenLen;
+                                    delta = axisDir * worldTotal;
+                                    deltaComputed = true;
                                 }
+                            }
+                        }
 
-                                // Snap to nearest non-selected element center along active axis
-                                if (sceneStyle.snapToElement && sceneStyle.elementSnapRadius > 0.0f) {
-                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
-                                    float bestDist = sceneStyle.elementSnapRadius;
-                                    float bestVal = 0.0f;
-                                    bool found = false;
-                                    int ax = manipDrag.handle;
-                                    for (const auto& elem : scene.getElements()) {
-                                        if (!elem->visible || scene.isSelected(elem->id)) continue;
-                                        float ec = (ax == 0) ? elem->transform.position.x : (ax == 1) ? elem->transform.position.y : elem->transform.position.z;
-                                        float nc = (ax == 0) ? newCenter.x : (ax == 1) ? newCenter.y : newCenter.z;
-                                        float d = std::abs(ec - nc);
-                                        if (d < bestDist) { bestDist = d; bestVal = ec; found = true; }
-                                    }
-                                    if (found) {
-                                        if (ax == 0) delta.x = bestVal - manipDrag.initialGizmoCenter.x;
-                                        else if (ax == 1) delta.y = bestVal - manipDrag.initialGizmoCenter.y;
-                                        else delta.z = bestVal - manipDrag.initialGizmoCenter.z;
-                                    }
+                        if (deltaComputed) {
+                            // Apply snap to grid if enabled
+                            if (sceneStyle.snapToGrid && sceneStyle.gridSpacing > 0.01f) {
+                                glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                float gs = sceneStyle.gridSpacing;
+                                glm::vec3 snapped(
+                                    std::round(newCenter.x / gs) * gs,
+                                    std::round(newCenter.y / gs) * gs,
+                                    std::round(newCenter.z / gs) * gs
+                                );
+                                delta = snapped - manipDrag.initialGizmoCenter;
+                            }
+
+                            // Snap to nearest non-selected element center along active axis (only for single-axis)
+                            if (manipDrag.handle <= opticsketch::GizmoHandle::Z && sceneStyle.snapToElement && sceneStyle.elementSnapRadius > 0.0f) {
+                                glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                float bestDist = sceneStyle.elementSnapRadius;
+                                float bestVal = 0.0f;
+                                bool found = false;
+                                int ax = manipDrag.handle;
+                                for (const auto& elem : scene.getElements()) {
+                                    if (!elem->visible || scene.isSelected(elem->id)) continue;
+                                    float ec = (ax == 0) ? elem->transform.position.x : (ax == 1) ? elem->transform.position.y : elem->transform.position.z;
+                                    float nc = (ax == 0) ? newCenter.x : (ax == 1) ? newCenter.y : newCenter.z;
+                                    float d = std::abs(ec - nc);
+                                    if (d < bestDist) { bestDist = d; bestVal = ec; found = true; }
                                 }
-
-                                // Snap to beam (highest priority — overrides grid/element snap)
-                                if (sceneStyle.snapToBeam && sceneStyle.beamSnapRadius > 0.0f) {
-                                    glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
-                                    lastBeamSnap = findBeamSnap(scene, newCenter, sceneStyle.beamSnapRadius);
-                                    if (lastBeamSnap.snapped) {
-                                        delta = lastBeamSnap.snapPosition - manipDrag.initialGizmoCenter;
-                                    }
-                                } else {
-                                    lastBeamSnap.snapped = false;
+                                if (found) {
+                                    if (ax == 0) delta.x = bestVal - manipDrag.initialGizmoCenter.x;
+                                    else if (ax == 1) delta.y = bestVal - manipDrag.initialGizmoCenter.y;
+                                    else delta.z = bestVal - manipDrag.initialGizmoCenter.z;
                                 }
+                            }
 
-                                // Apply delta to each selected element from its initial position
+                            // Snap to beam (highest priority — overrides grid/element snap)
+                            if (sceneStyle.snapToBeam && sceneStyle.beamSnapRadius > 0.0f) {
+                                glm::vec3 newCenter = manipDrag.initialGizmoCenter + delta;
+                                lastBeamSnap = findBeamSnap(scene, newCenter, sceneStyle.beamSnapRadius);
+                                if (lastBeamSnap.snapped) {
+                                    delta = lastBeamSnap.snapPosition - manipDrag.initialGizmoCenter;
+                                }
+                            } else {
+                                lastBeamSnap.snapped = false;
+                            }
+
+                            // Apply delta to each selected element from its initial position
+                            for (auto& [id, initT] : manipDrag.initialTransforms) {
+                                auto* e = scene.getElement(id);
+                                if (e) e->transform.position = initT.position + delta;
+                            }
+
+                            // Auto-orient to beam if snapped
+                            if (lastBeamSnap.snapped && sceneStyle.autoOrientToBeam) {
+                                glm::vec3 beamDir = lastBeamSnap.beamDirection;
+                                glm::vec3 up(0.0f, 1.0f, 0.0f);
+                                glm::vec3 perp = glm::normalize(glm::cross(up, beamDir));
+                                if (glm::length(perp) < 1e-5f) perp = glm::vec3(1, 0, 0);
+                                float angle = std::atan2(beamDir.x, beamDir.z);
+                                glm::quat orient = glm::angleAxis(angle, up);
                                 for (auto& [id, initT] : manipDrag.initialTransforms) {
                                     auto* e = scene.getElement(id);
-                                    if (e) e->transform.position = initT.position + delta;
-                                }
-
-                                // Auto-orient to beam if snapped
-                                if (lastBeamSnap.snapped && sceneStyle.autoOrientToBeam) {
-                                    glm::vec3 beamDir = lastBeamSnap.beamDirection;
-                                    // Orient perpendicular to beam: element faces along beam's perpendicular in XZ plane
-                                    glm::vec3 up(0.0f, 1.0f, 0.0f);
-                                    glm::vec3 perp = glm::normalize(glm::cross(up, beamDir));
-                                    if (glm::length(perp) < 1e-5f) perp = glm::vec3(1, 0, 0);
-                                    // Build rotation: element's local Z faces along beam direction
-                                    float angle = std::atan2(beamDir.x, beamDir.z);
-                                    glm::quat orient = glm::angleAxis(angle, up);
-                                    for (auto& [id, initT] : manipDrag.initialTransforms) {
-                                        auto* e = scene.getElement(id);
-                                        if (e) e->transform.rotation = orient;
-                                    }
+                                    if (e) e->transform.rotation = orient;
                                 }
                             }
                         }
@@ -1839,6 +1899,7 @@ int main() {
                             glm::vec3 axisDir;
                             float radius;
                             opticsketch::Gizmo::getRotateAxis(manipDrag.handle, axisDir, radius);
+                            axisDir = manipDrag.dragOrientation * axisDir; // Apply local/world orientation
                             float t;
                             if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, axisDir, t)) {
                                 glm::vec3 hit = ray.origin + t * ray.direction;
@@ -1854,6 +1915,8 @@ int main() {
                                 primaryElem->transform.position = manipDrag.initialGizmoCenter - offset;
                             }
                         }
+                        manipDrag.lastViewportX = viewportX;
+                        manipDrag.lastViewportY = viewportY;
                     }
                 } else if (currentTool == opticsketch::ToolMode::Scale) {
                     // Scale: apply to first selected element only (single-element behavior)
@@ -1862,18 +1925,27 @@ int main() {
                         manipDrag.lastApplyFrame = frame;
                         auto* primaryElem = selectedElems.empty() ? nullptr : selectedElems[0];
                         if (primaryElem) {
-                            glm::vec3 axisDir;
-                            float axisLen;
-                            opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
                             float t;
                             if (opticsketch::Raycast::intersectPlane(ray, manipDrag.initialGizmoCenter, manipDrag.movePlaneNormal, t)) {
                                 glm::vec3 P = ray.origin + t * ray.direction;
-                                float signedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
-                                float delta = signedDist - manipDrag.initialSignedDist;
-                                glm::vec3 s = manipDrag.initialScale;
-                                if (manipDrag.handle == 0) primaryElem->transform.scale.x = s.x * (1.0f + delta);
-                                else if (manipDrag.handle == 1) primaryElem->transform.scale.y = s.y * (1.0f + delta);
-                                else primaryElem->transform.scale.z = s.z * (1.0f + delta);
+                                if (manipDrag.handle == opticsketch::GizmoHandle::Center) {
+                                    // Uniform scale: ratio of distances from gizmo center
+                                    float currentDist = glm::length(P - manipDrag.initialGizmoCenter);
+                                    float scaleFactor = (manipDrag.initialSignedDist > 1e-5f) ? currentDist / manipDrag.initialSignedDist : 1.0f;
+                                    primaryElem->transform.scale = manipDrag.initialScale * scaleFactor;
+                                } else {
+                                    // Single-axis scale
+                                    glm::vec3 axisDir;
+                                    float axisLen;
+                                    opticsketch::Gizmo::getMoveAxis(manipDrag.handle, axisDir, axisLen);
+                                    axisDir = manipDrag.dragOrientation * axisDir; // Apply local/world orientation
+                                    float signedDist = glm::dot(P - manipDrag.initialGizmoCenter, axisDir);
+                                    float delta = signedDist - manipDrag.initialSignedDist;
+                                    glm::vec3 s = manipDrag.initialScale;
+                                    if (manipDrag.handle == 0) primaryElem->transform.scale.x = s.x * (1.0f + delta);
+                                    else if (manipDrag.handle == 1) primaryElem->transform.scale.y = s.y * (1.0f + delta);
+                                    else primaryElem->transform.scale.z = s.z * (1.0f + delta);
+                                }
                                 primaryElem->transform.scale = glm::max(primaryElem->transform.scale, glm::vec3(0.01f));
                                 glm::vec3 localCenter = primaryElem->getLocalBoundsCenter();
                                 glm::vec3 offset = glm::vec3(primaryElem->transform.rotation * glm::vec4(primaryElem->transform.scale * localCenter, 0.0f));
@@ -1923,8 +1995,35 @@ int main() {
                         gizmoType = opticsketch::GizmoType::Move;
                         break;
                 }
+                // Compute drag angle for rotation arc feedback
+                float dragAngle = 0.0f;
+                float dragStartAngle = 0.0f;
+                if (manipDrag.active && gizmoType == opticsketch::GizmoType::Rotate && exclusiveHandle >= 0) {
+                    // Recompute current angle to pass to gizmo render
+                    glm::vec3 axisDir;
+                    float radius;
+                    opticsketch::Gizmo::getRotateAxis(exclusiveHandle, axisDir, radius);
+                    axisDir = manipDrag.dragOrientation * axisDir;
+                    glm::vec3 viewDir = glm::normalize(viewport.getCamera().position - manipDrag.initialGizmoCenter);
+                    glm::vec3 refRight = glm::normalize(glm::cross(axisDir, viewDir));
+                    glm::vec3 refUp = glm::cross(axisDir, refRight);
+                    // Use last mouse pos to get current angle
+                    opticsketch::Raycast::Ray curRay = opticsketch::Raycast::screenToRay(
+                        viewport.getCamera(), manipDrag.lastViewportX, manipDrag.lastViewportY, vpWidth, vpHeight);
+                    float t;
+                    if (opticsketch::Raycast::intersectPlane(curRay, manipDrag.initialGizmoCenter, axisDir, t)) {
+                        glm::vec3 hit = curRay.origin + t * curRay.direction;
+                        glm::vec3 toHit = hit - manipDrag.initialGizmoCenter;
+                        float currentAngle = std::atan2(glm::dot(toHit, refUp), glm::dot(toHit, refRight));
+                        dragAngle = currentAngle - manipDrag.initialAngle;
+                        dragStartAngle = manipDrag.initialAngle;
+                    }
+                }
+                // Use dragging orientation (frozen at drag start) if dragging, else current orientation
+                glm::mat3 renderOrientation = manipDrag.active ? manipDrag.dragOrientation : gizmoOrientation;
                 // Use centroid for gizmo placement (works for both single and multi-select)
-                viewport.renderGizmoAt(selectionCentroid, gizmoType, lastGizmoHoveredHandle, exclusiveHandle);
+                viewport.renderGizmoAt(selectionCentroid, gizmoType, lastGizmoHoveredHandle, exclusiveHandle,
+                                       renderOrientation, dragAngle, dragStartAngle);
             }
 
             // Render beam snap highlight when actively dragging and snapped

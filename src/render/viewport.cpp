@@ -8,6 +8,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 #include <cfloat>
 #include <limits>
 #include <tuple>
@@ -1710,6 +1711,10 @@ void Viewport::renderBeams(Scene* scene) {
         glEnableVertexAttribArray(1);
     }
 
+    // Enable blending for intensity-based alpha modulation on traced beams
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
     glBindVertexArray(beamBuffer.vao);
     glBindBuffer(GL_ARRAY_BUFFER, beamBuffer.vbo);
 
@@ -1732,7 +1737,10 @@ void Viewport::renderBeams(Scene* scene) {
             }
             gridShader.setVec3("uColor", beamColor);
         }
-        gridShader.setFloat("uAlpha", 1.0f);
+
+        // Modulate alpha by beam intensity (traced beams show power loss visually)
+        float alpha = std::clamp(beam->intensity, 0.15f, 1.0f);
+        gridShader.setFloat("uAlpha", alpha);
 
         // Buffer orphaning: upload new data into existing buffer
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
@@ -1741,6 +1749,7 @@ void Viewport::renderBeams(Scene* scene) {
 
     glBindVertexArray(0);
     glLineWidth(1.0f);
+    glDisable(GL_BLEND);
     gridShader.setFloat("uEmissive", 0.0f);
 }
 
@@ -1995,19 +2004,21 @@ void Viewport::renderGizmo(Scene* scene, GizmoType gizmoType, int hoveredHandle,
     gizmo->render(camera, selected, gizmoType, width, height, hoveredHandle, exclusiveHandle);
 }
 
-void Viewport::renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle) {
+void Viewport::renderGizmoAt(const glm::vec3& center, GizmoType gizmoType, int hoveredHandle, int exclusiveHandle,
+                             const glm::mat3& orientation, float dragAngle, float dragStartAngle) {
     if (!gizmo) return;
 
     // Create a temporary element at the given center so we can reuse Gizmo::render
     Element tmp(ElementType::Laser, "__gizmo_tmp");
     tmp.transform.position = center;
-    gizmo->render(camera, &tmp, gizmoType, width, height, hoveredHandle, exclusiveHandle);
+    gizmo->render(camera, &tmp, gizmoType, width, height, hoveredHandle, exclusiveHandle, orientation, dragAngle, dragStartAngle);
 }
 
 int Viewport::getGizmoHoveredHandle(Element* selectedElement, GizmoType gizmoType,
-                                    float viewportX, float viewportY) const {
+                                    float viewportX, float viewportY,
+                                    const glm::mat3& orientation) const {
     if (!gizmo || !selectedElement) return -1;
-    return gizmo->getHoveredHandle(camera, selectedElement, gizmoType, viewportX, viewportY, width, height);
+    return gizmo->getHoveredHandle(camera, selectedElement, gizmoType, viewportX, viewportY, width, height, orientation);
 }
 
 // --- Fullscreen Quad (shared by bloom and gradient) ---

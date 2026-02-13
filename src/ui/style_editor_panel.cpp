@@ -1,5 +1,6 @@
 #include "ui/style_editor_panel.h"
 #include "style/scene_style.h"
+#include "project/project.h"
 #include <tinyfiledialogs.h>
 #include <string>
 
@@ -117,6 +118,32 @@ void StyleEditorPanel::render(SceneStyle* style) {
         ImGui::DragFloat("Snap Radius##beam", &style->beamSnapRadius, 0.1f, 0.1f, 50.0f, "%.1f mm");
         ImGui::Checkbox("Auto-Orient to Beam", &style->autoOrientToBeam);
         ImGui::TextDisabled("Auto-orient places element perpendicular to beam");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Style preset save/load
+    float btnWidth = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("Save Style...", ImVec2(btnWidth, 0))) {
+        const char* filters[] = { "*.optstyle" };
+        const char* path = tinyfd_saveFileDialog(
+            "Save Style Preset", "style.optstyle", 1, filters, "Style Presets (*.optstyle)");
+        if (path) {
+            saveStylePreset(path, style);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Style...", ImVec2(btnWidth, 0))) {
+        const char* filters[] = { "*.optstyle" };
+        const char* path = tinyfd_openFileDialog(
+            "Load Style Preset", "", 1, filters, "Style Presets (*.optstyle)", 0);
+        if (path) {
+            if (loadStylePreset(path, style)) {
+                lastLoadedPath = path;
+            }
+        }
     }
 
     ImGui::Spacing();
